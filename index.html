@@ -21,7 +21,9 @@
     <aside class="sidebar">
       <div class="brand"><span class="logo-mark">M&amp;A</span> CRM</div>
       <nav>
-        <button class="tab active" data-tab="companies"><span class="ico">▦</span>Companies</button>
+        <button class="tab active" data-tab="projects"><span class="ico">◆</span>Projects</button>
+        <div id="navProjects" class="nav-projects"></div>
+        <button class="tab" data-tab="companies"><span class="ico">▦</span>Companies</button>
         <button class="tab" data-tab="match"><span class="ico">◎</span>Match engine</button>
         <button class="tab" data-tab="email"><span class="ico">✉</span>Email</button>
         <button class="tab" data-tab="activity"><span class="ico">≡</span>Activity</button>
@@ -34,8 +36,11 @@
     </aside>
 
     <main>
+      <!-- PROJECTS -->
+      <section id="tab-projects" class="panel active"><div id="projectsView"></div></section>
+
       <!-- COMPANIES -->
-      <section id="tab-companies" class="panel active">
+      <section id="tab-companies" class="panel">
         <div class="page-head">
           <div>
             <h1>Companies</h1>
@@ -59,12 +64,24 @@
           <select id="filterRole"><option value="">All roles</option></select>
           <select id="filterProject"><option value="">All projects</option></select>
           <select id="filterCountry"><option value="">All countries</option></select>
+          <select id="filterSector"><option value="">All sectors</option></select>
+          <select id="filterOwnership"><option value="">Any ownership</option></select>
+          <select id="filterSize">
+            <option value="">Any size</option>
+            <option value="0-50">&lt; 50 employees</option>
+            <option value="50-250">50–250</option>
+            <option value="250-1000">250–1,000</option>
+            <option value="1000-5000">1,000–5,000</option>
+            <option value="5000-">5,000+</option>
+          </select>
           <select id="filterEnriched">
             <option value="">Any research status</option>
             <option value="yes">Researched by Claude</option>
             <option value="no">Not researched yet</option>
           </select>
           <label class="check"><input type="checkbox" id="filterEmail"> Has email</label>
+          <label class="check"><input type="checkbox" id="filterMulti"> In 2+ projects</label>
+          <button class="btn ghost sm" id="clearFilters">Clear filters</button>
         </div>
 
         <div id="bulkBar" class="bulk-bar" hidden>
@@ -268,6 +285,9 @@
     </form>
   </dialog>
 
+  <!-- Project dialog -->
+  <dialog id="projectDialog"><form method="dialog" id="projectForm"></form></dialog>
+
   <!-- Import wizard -->
   <dialog id="importDialog" class="wide"><div id="importBody"></div></dialog>
 
@@ -276,5 +296,6 @@
   <script src="engine.js"></script>
   <script src="enrich.js"></script>
   <script src="app.js"></script>
+  <script src="projects.js"></script>
 </body>
 </html>

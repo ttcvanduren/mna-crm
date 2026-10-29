@@ -15,9 +15,13 @@ The data lives in a **shared team database** (Supabase) once connected, or in yo
 
 Upload these files to your `mna-crm` repo with **Add file → Upload files → Commit changes**:
 
-`index.html`, `app.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
+`index.html`, `app.js`, `projects.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
 
-**Don't upload** `sample-companies.csv`, the `.claude` folder or any real company lists.
+**Don't upload** `CLAUDE.md`, `sample-companies.csv`, or the `.claude`, `database` and `research` folders. They contain client data or local tooling.
+
+### Loading the combined database
+
+`database\mna-crm-database-20261029.json` holds all buyers from Lakeside, Sentinel, Thames and Anubis: 911 unique companies, with project history, contacts and descriptions. Load it once via **Settings → Restore backup**. With the team database connected, it's loaded for everyone.
 
 GitHub Pages: repo → **Settings → Pages** → Branch `main`, folder `/ (root)`. The site is then live at `https://<your-github-username>.github.io/mna-crm/`. After an upload, press **Ctrl+F5** to load the new version.
 

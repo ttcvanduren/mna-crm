@@ -38,6 +38,8 @@ const state = {
   companies: [],
   templates: [DEFAULT_TEMPLATE],
   activity: [],
+  projects: [],
+  projectView: null,
   settings: loadSettings(),
   weights: { ...Engine.DEFAULT_WEIGHTS },
   mappingMemory: {},
@@ -125,11 +127,13 @@ window.addEventListener('beforeunload', e => { if (dirty.size) { flush(); e.prev
 function showTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'projects') renderProjects();
+  if (name === 'companies') renderCompanies();
   if (name === 'email') renderEmail();
   if (name === 'activity') renderActivity();
   if (name === 'match') runMatch();
 }
-$$('.tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+$$('.tab').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'projects') state.projectView = null; showTab(b.dataset.tab); }));
 
 // ---------- Small renderers ----------
 const initials = s => (norm(s).match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
@@ -143,7 +147,7 @@ const money = (c, v) => v == null || v === '' ? '' : `${c.currency && c.currency
 const employeesOf = c => c.linkedin_employees ?? c.employees ?? null;
 const KEY_TAGS = new Set(['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strategy']);
 const tagShort = t => ({ 'Corporate Development': 'CorpDev', Strategy: 'Strat' }[t] || t);
-const projectChips = c => (c.projects || []).filter(p => p.project).map(p => `<span class="chip" title="${esc([p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ': ' + esc(p.status.slice(0, 22)) : ''}</span>`).join('');
+const projectChips = c => (c.projects || []).filter(p => p.project).map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}" title="${esc([p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ': ' + esc(p.status.slice(0, 22)) : ''}</span>`).join('');
 const daysAgo = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
 const ago = iso => { const d = daysAgo(iso); return d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`; };
 const contactText = c => (c.contacts || []).map(x => [x.name, x.title, x.email].join(' ')).join(' ');
@@ -152,14 +156,20 @@ const contactText = c => (c.contacts || []).map(x => [x.name, x.title, x.email].
 function filteredCompanies() {
   const q = $('#search').value.toLowerCase().trim();
   const role = $('#filterRole').value, project = $('#filterProject').value, country = $('#filterCountry').value;
-  const enr = $('#filterEnriched').value, email = $('#filterEmail').checked;
+  const enr = $('#filterEnriched').value, email = $('#filterEmail').checked, multi = $('#filterMulti').checked;
+  const sector = $('#filterSector').value, own = $('#filterOwnership').value;
+  const [smin, smax] = ($('#filterSize').value || '-').split('-').map(v => (v === '' ? null : Number(v)));
   const list = state.companies.filter(c =>
     (!role || c.role === role) &&
     (!project || c.projects.some(p => p.project === project)) &&
     (!country || c.country === country) &&
+    (!sector || c.sector === sector) &&
+    (!own || Engine.ownershipType(c.ownership) === own) &&
+    (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
+    (!multi || c.projects.length > 1) &&
     (!enr || (enr === 'yes') === !!c.enrichment) &&
     (!email || Engine.hasEmail(c)) &&
-    (!q || [c.name, c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, c.short_description, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
+    (!q || [c.name, c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
   const { key, dir } = state.sort;
   const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
   return list.sort((a, b) => {
@@ -182,10 +192,9 @@ function renderCompanies() {
     const tags = [...new Set(c.contacts.map(x => x.role_tag).filter(t => KEY_TAGS.has(t)))];
     const emails = c.contacts.filter(x => x.email).length;
     const emp = employeesOf(c);
-    const sub = c.short_description || c._domain || '';
     return `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
       <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
-      <td><div class="co">${logo(c)}<div><div class="co-name">${esc(c.name)}</div><div class="co-sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
+      <td>${companyCell(c)}</td>
       <td>${roleChip(c.role)}</td>
       <td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
       <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
@@ -210,6 +219,8 @@ function renderFilterOptions() {
   fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'All roles');
   fill('#filterProject', [...new Set(state.companies.flatMap(c => c.projects.map(p => p.project)).filter(Boolean))].sort(), 'All projects');
   fill('#filterCountry', [...new Set(state.companies.map(c => c.country).filter(Boolean))].sort(), 'All countries');
+  fill('#filterSector', [...new Set(state.companies.map(c => c.sector).filter(Boolean))].sort(), 'All sectors');
+  fill('#filterOwnership', [...new Set(state.companies.map(c => Engine.ownershipType(c.ownership)).filter(Boolean))].sort(), 'Any ownership');
   const dl = state.companies.map(c => `<option value="${esc(c.name)}">`).join('');
   if ($('#companyList')._html !== dl) { $('#companyList').innerHTML = dl; $('#companyList')._html = dl; }
 }
@@ -221,7 +232,13 @@ function renderBulkBar() {
 
 let searchTimer;
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.limit = 200; renderCompanies(); }, 150); });
-['#filterRole', '#filterProject', '#filterCountry', '#filterEnriched', '#filterEmail'].forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
+const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti'];
+FILTERS.forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
+$('#clearFilters').addEventListener('click', () => {
+  FILTERS.forEach(s => { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
+  $('#search').value = '';
+  renderCompanies();
+});
 $('#companyTable thead').addEventListener('click', e => {
   const k = e.target.closest('th')?.dataset.sort;
   if (!k) return;
@@ -234,6 +251,7 @@ $('#companyTable tbody').addEventListener('click', e => {
     e.target.closest('tr').classList.toggle('sel', e.target.checked);
     return renderBulkBar();
   }
+  if (e.target.closest('a')) return;
   const tr = e.target.closest('tr[data-id]');
   if (tr) openDrawer(tr.dataset.id);
 });
@@ -250,6 +268,25 @@ $('#bulkDelete').addEventListener('click', async () => {
   renderCompanies();
 });
 $('#bulkEnrich').addEventListener('click', () => startResearch([...state.picked]));
+
+// Descriptions written by Claude Code from the data in your own lists (no web research).
+async function importDescriptions(items) {
+  const idx = Engine.buildIndex(state.companies);
+  let n = 0;
+  for (const it of items || []) {
+    const c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name || '' }, idx).exact[0];
+    if (!c) continue;
+    if (it.short_description && !c.enrichment?.short_description) c.short_description = it.short_description;
+    if (it.summary) c.summary = it.summary;
+    if (it.tags?.length) c.tags = [...new Set([...(c.tags || []), ...it.tags.map(t => String(t).toLowerCase())])];
+    touch(c);
+    n++;
+  }
+  await flush();
+  renderCompanies();
+  if (state.drawer) renderDrawer();
+  toast(`Descriptions imported for ${n} companies.`, 6000);
+}
 
 // ---------- Research via Claude Code (subscription) ----------
 // Export: a small JSON file with what Claude needs to identify each company.
@@ -280,6 +317,7 @@ $('#importResearch').addEventListener('change', async e => {
   try {
     const d = JSON.parse(await f.text());
     const items = Array.isArray(d) ? d : d.companies;
+    if (d.type === 'mna-crm-descriptions') return importDescriptions(items);
     if (!Array.isArray(items) || !items.some(x => x.profile)) throw new Error('This is not a research results file.');
     const idx = Engine.buildIndex(state.companies);
     let updated = 0, added = 0, skipped = 0;
@@ -357,8 +395,9 @@ function renderDrawer() {
   if (tab === 'overview') {
     body = `${!e ? `<div class="callout"><span>✦</span><div><b>Not researched yet.</b> <span class="muted">Claude can find the LinkedIn page, key people, acquisitions and a description. Export it, ask Claude Code to research the file, then use <b>Import research</b>.</span></div><span class="spacer"></span><button class="btn primary" data-act="export">Export for research</button></div>` : ''}
       ${c.short_description ? `<p class="lead">${esc(c.short_description)}</p>` : ''}
-      ${(e?.long_description || c.description) ? `<p class="prose">${esc(e?.long_description || c.description)}</p>` : '<p class="muted">No description yet.</p>'}
-      ${e?.long_description && c.description && c.description !== e.long_description ? `<details class="small" style="margin-top:8px"><summary>Description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
+      ${(e?.long_description || c.summary || c.description) ? `<p class="prose">${esc(e?.long_description || c.summary || c.description)}</p>` : '<p class="muted">No description yet.</p>'}
+      ${c.tags?.length ? `<div class="chips" style="margin-top:8px">${c.tags.map(t => `<span class="chip">#${esc(t)}</span>`).join('')}</div>` : ''}
+      ${(e?.long_description || c.summary) && c.description && c.description !== (e?.long_description || c.summary) ? `<details class="small" style="margin-top:8px"><summary>Original description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
       <div class="facts">
         ${fact('Role', c.role && roleChip(c.role))}
         ${fact('Sector', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
@@ -376,6 +415,8 @@ function renderDrawer() {
       ${c.target_sectors || c.target_countries || c.min_revenue != null || c.max_revenue != null ? `<h3>Acquisition criteria</h3><div class="facts">
         ${fact('Sectors', esc(c.target_sectors))}${fact('Countries', esc(c.target_countries))}
         ${fact('Revenue range', c.min_revenue != null || c.max_revenue != null ? `€${c.min_revenue ?? 0}–${c.max_revenue ?? '∞'}m` : '')}</div>` : ''}
+      ${c.projects.length ? `<h3>Track record with us</h3><div class="chips">${c.projects.map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}">${esc(p.project)}: ${esc(p.status || 'Not approached')}</span>`).join('')}</div>
+        ${c.projects.filter(p => p.rationale).map(p => `<p class="small"><b>Why it fits ${esc(p.project)}:</b> ${esc(p.rationale)}</p>`).join('')}` : ''}
       ${c.portfolio ? `<h3>Portfolio</h3><p class="prose">${esc(c.portfolio)}</p>` : ''}
       ${c.notes ? `<h3>Notes</h3><p class="prose">${esc(c.notes)}</p>` : ''}
       ${e?.notes ? `<h3>Research notes</h3><p class="prose muted">${esc(e.notes)}</p>` : ''}`;
@@ -402,8 +443,10 @@ function renderDrawer() {
         <div class="muted">${esc(a.description || '')}</div></div>`).join('')}</div>` : `<div class="empty">No acquisitions recorded.${c.enrichment ? ' Claude found none.' : ''}</div>`;
   } else if (tab === 'projects') {
     body = c.projects.map(p => `<div class="proj">
-      <b>${esc(p.project || 'Project')}</b> ${p.status ? `<span class="chip blue">${esc(p.status)}</span>` : ''}
-      <span class="muted small">${esc([p.last_contact && 'Last contact ' + p.last_contact, p.responsible && 'Resp. ' + p.responsible, p.tier && 'Tier ' + p.tier].filter(Boolean).join(' · '))}</span>
+      <b>${esc(p.project || 'Project')}</b> <span class="muted small">${esc(state.projects.find(x => x.name === p.project)?.client || '')}</span> ${stageChip(p.status)}
+      <span class="muted small">${esc([p.furthest_stage && p.furthest_stage !== p.status && 'Furthest: ' + p.furthest_stage, p.last_contact && 'Last contact ' + p.last_contact, p.responsible && 'Resp. ' + p.responsible, p.tier && 'Tier ' + p.tier, p.wave].filter(Boolean).join(' · '))}</span>
+      ${p.rationale ? `<div class="small"><b>Rationale:</b> ${esc(p.rationale)}</div>` : ''}
+      ${p.pass_reason ? `<div class="small err"><b>Pass reason:</b> ${esc(p.pass_reason)}</div>` : ''}
       ${p.log ? `<div class="small">${esc(p.log)}</div>` : ''}
       ${p.remarks ? `<div class="small muted">${esc(p.remarks)}</div>` : ''}
       ${Object.keys(p.extra || {}).length ? `<details class="small"><summary>More info</summary>${Object.entries(p.extra).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join('')}</details>` : ''}
@@ -592,7 +635,17 @@ function prepSheet(file, sh, resetMapping, idx = Engine.buildIndex(state.compani
     if (!sameRow) firstByName.set(n, sh.r0 + sh.headerRow + i + 2);
     return { ...p, i, excelRow: sh.r0 + sh.headerRow + i + 2, text: row.join(' ').toLowerCase(), exact: dup.exact[0], possible: dup.possible.slice(0, 3), sameRow };
   }).filter(Boolean);
-  if (!sh.selected || resetMapping) sh.selected = new Set(sh.parsed.map(p => p.i));
+  // Section rows like "IPA" or "DMS" between groups of buyers: the name is a category used by
+  // other rows (or a header word) and the row has no website or contacts.
+  const categories = new Set(sh.parsed.flatMap(p => [p.company.sector, p.company.subsector]).filter(Boolean).map(s => s.toLowerCase()));
+  const headerWords = new Set(sh.headers.map(h => h.toLowerCase()).concat(['category', 'company', 'multiple', 'other']));
+  for (const p of sh.parsed) {
+    const n = p.company.name.toLowerCase();
+    // A repeated header row has several cells equal to the header labels.
+    const repeatedHeader = sh.rows[sh.headerRow + 1 + p.i].filter((v, j) => v !== '' && norm(v).toLowerCase() === (sh.headers[j] || '').toLowerCase()).length >= 2;
+    p.sectionRow = repeatedHeader || ((categories.has(n) || headerWords.has(n)) && !p.company.website && !p.contacts.length);
+  }
+  if (!sh.selected || resetMapping) sh.selected = new Set(sh.parsed.filter(p => !p.sectionRow).map(p => p.i));
   sh.choices ??= {};
 }
 
@@ -640,7 +693,11 @@ function renderImport() {
   const head = `<div class="muted small">File ${imp.fi + 1} of ${imp.files.length}</div>`;
   if (imp.stage === 'sheets') {
     $('#importBody').innerHTML = `${head}<h2>${esc(file.name)}</h2>
-      <label style="max-width:360px">Project name <input id="impProject" value="${esc(file.project)}" placeholder="None (plain company list)"></label>
+      <div class="form-grid" style="max-width:720px">
+        <label>Project name <input id="impProject" value="${esc(file.project)}" placeholder="None (plain company list)"></label>
+        <label>Client <input id="impClient" value="${esc(file.client || state.projects.find(p => p.name === file.project)?.client || '')}" placeholder="e.g. Teavaro"></label>
+      </div>
+      <p class="muted small">Importing creates the project (if new) and adds every company to the shared database. Companies that already exist are merged.</p>
       <p class="muted small">Pick the sheets to import. Each sheet can have its own layout; you check the columns on the next screen. Capital IQ exports are recognised automatically.</p>
       <table class="compact"><thead><tr><th></th><th>Sheet</th><th class="num">Companies</th><th>Default role</th></tr></thead><tbody>
       ${file.sheets.map((s, k) => `<tr>
@@ -709,7 +766,7 @@ function renderImport() {
       <table class="compact"><thead><tr><th></th><th>Row</th><th>Company</th><th>Role</th><th>Country</th><th class="num">Revenue</th><th>Contacts</th><th>Status</th><th>Duplicate?</th></tr></thead><tbody>
       ${visible.map(p => `<tr class="${sh.selected.has(p.i) ? '' : 'unsel'}">
         <td><input type="checkbox" data-row="${p.i}" ${sh.selected.has(p.i) ? 'checked' : ''}></td>
-        <td class="muted">${p.excelRow}</td><td>${esc(p.company.name)}</td><td>${esc(p.company.role)}</td><td>${esc(p.company.country)}</td>
+        <td class="muted">${p.excelRow}</td><td>${esc(p.company.name)}${p.sectionRow ? ' <span class="chip amber" title="Looks like a section header, not a company">section row?</span>' : ''}</td><td>${esc(p.company.role)}</td><td>${esc(p.company.country)}</td>
         <td class="num">${money(p.company, p.company.revenue)}</td>
         <td class="small">${p.contacts.map(c => esc(c.name || c.email) + (c.email ? '' : ' <span class="muted">(no email)</span>')).join('<br>')}</td>
         <td class="small">${esc((p.project.status || '').slice(0, 30))}</td>
@@ -728,13 +785,17 @@ function nextAfterSheet() {
   $('#importDialog').close();
   const t = imp.totals || { added: 0, merged: 0 };
   toast(`Import finished: ${t.added} new companies, ${t.merged} merged into existing ones.`, 7000);
+  const proj = imp.files.map(f => f.project).filter(Boolean).pop();
   imp = null;
   renderCompanies();
+  if (proj) { state.projectView = proj; showTab('projects'); }
 }
 
 function importSheet() {
   const file = curFile(), sh = curSheet();
   const idx = Engine.buildIndex(state.companies);
+  const projName = sh.project || file.project;
+  if (projName) ensureProject(projName, { client: file.client || '', source: file.name });
   let added = 0, merged = 0;
   for (const p of sh.parsed) {
     if (!sh.selected.has(p.i)) continue;
@@ -768,6 +829,7 @@ $('#importBody').addEventListener('click', e => {
   if (act === 'skipfile') { imp.si = includedSheets().length; nextAfterSheet(); return; }
   if (act === 'tosheets') {
     file.project = norm($('#impProject').value);
+    file.client = norm($('#impClient').value);
     if (!includedSheets().length) return toast('Select at least one sheet.');
     const idx = Engine.buildIndex(state.companies);
     file.sheets.forEach(s => prepSheet(file, s, false, idx));
@@ -790,6 +852,7 @@ $('#importBody').addEventListener('change', e => {
     if (t.dataset.inc) file.sheets[t.dataset.inc].include = t.checked;
     if (t.dataset.role !== undefined) { const s = file.sheets[t.dataset.role]; s.role = t.value; prepSheet(file, s, false); }
     if (t.id === 'impProject') file.project = norm(t.value);
+    if (t.id === 'impClient') file.client = norm(t.value);
     return;
   }
   const sh = curSheet();
@@ -1291,7 +1354,7 @@ $('#signOut').addEventListener('click', async () => { try { const app = getMsal(
 
 // ---------- Backup ----------
 $('#backup').addEventListener('click', () => {
-  const data = { version: 3, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory };
+  const data = { version: 4, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory };
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
   a.download = `mna-crm-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -1310,6 +1373,12 @@ $('#restore').addEventListener('change', async e => {
     incoming.forEach(c => map.set(c.id, c));
     state.companies = [...map.values()];
     incoming.forEach(c => dirty.add(c.id));
+    for (const p of d.projects || []) {
+      const cur = state.projects.find(x => x.name.toLowerCase() === p.name.toLowerCase());
+      if (cur) Object.assign(cur, { ...p, id: cur.id }); else state.projects.push(p);
+    }
+    syncProjectsFromCompanies();
+    saveShared('projects', state.projects);
     if (d.templates?.length) { state.templates = d.templates; saveShared('templates', state.templates); }
     if (d.weights) { state.weights = d.weights; saveShared('weights', state.weights); }
     if (d.mappingMemory) { state.mappingMemory = d.mappingMemory; saveShared('mappingMemory', state.mappingMemory); }
@@ -1349,6 +1418,7 @@ function downloadSheet(rows, filename) {
 }
 
 function renderAll() {
+  renderProjects();
   renderCompanies();
   renderWeights();
   renderSettings();
@@ -1360,10 +1430,12 @@ function renderAll() {
 // ---------- Start ----------
 async function loadData() {
   setSync('Loading…');
-  const [companies, templates, activity, weights, mapping] = await Promise.all([
-    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null),
+  const [companies, templates, activity, weights, mapping, projects] = await Promise.all([
+    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null),
   ]);
   state.companies = companies.map(migrate);
+  state.projects = projects || [];
+  syncProjectsFromCompanies();
   state.templates = templates?.length ? templates : [DEFAULT_TEMPLATE];
   state.activity = activity || [];
   state.weights = { ...Engine.DEFAULT_WEIGHTS, ...(weights || {}) };
@@ -1372,7 +1444,8 @@ async function loadData() {
   renderAll();
 }
 
-(async function init() {
+// Starts after all scripts (including projects.js) have loaded.
+window.addEventListener('DOMContentLoaded', async function init() {
   try {
     const { mode, user } = await Store.init();
     if (mode === 'cloud' && !user) {
@@ -1394,4 +1467,4 @@ async function loadData() {
     toast('Could not load data: ' + err.message, 10000);
     renderAll();
   }
-})();
+});

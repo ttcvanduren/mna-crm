@@ -9,7 +9,7 @@ const Engine = (() => {
     { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'rol'] },
     { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
     { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
-    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'hqcountry', 'headquarters', 'contactoffice', 'office', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation'] },
+    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry'] },
     { key: 'hq_city', label: 'HQ city', aliases: ['city', 'hqcity', 'plaats', 'stad'] },
     { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography'] },
     { key: 'currency', label: 'Currency', aliases: ['currency', 'valuta', 'reportingcurrency'] },
@@ -40,13 +40,41 @@ const Engine = (() => {
   ];
   // Per-project information (a buyer can appear in many projects with a different status each time).
   const PROJECT_FIELDS = [
-    { key: 'status', label: 'Status', aliases: ['status', 'stage', 'processstatus'] },
+    { key: 'status', label: 'Status / current stage', aliases: ['currentstage', 'status', 'stage', 'processstatus'] },
+    { key: 'furthest_stage', label: 'Furthest stage reached', aliases: ['furtheststagereached', 'furtheststage', 'higheststage'] },
     { key: 'last_contact', label: 'Date of last contact', aliases: ['dateoflastcontact', 'lastcontact', 'lastcontactdate', 'date'], date: true },
+    { key: 'pass_reason', label: 'Pass reason', aliases: ['passreason', 'reason', 'reasonforpassing', 'declinereason', 'reasonpassed'] },
+    { key: 'rationale', label: 'Acquisition rationale', aliases: ['acquisitionrationale', 'rationale', 'fitrationale', 'investmentrationale', 'strategicrationale', 'whyfit'] },
+    { key: 'wave', label: 'Outreach wave', aliases: ['outreachwave', 'wave'] },
     { key: 'log', label: 'Log', aliases: ['log', 'history', 'activitylog'] },
     { key: 'responsible', label: 'Responsible', aliases: ['responsible', 'coverage', 'dealteam', 'accountowner'] },
     { key: 'tier', label: 'Tier / priority', aliases: ['tier', 'priority', 'prio'] },
-    { key: 'remarks', label: 'Remarks', aliases: ['remarks', 'comment', 'comments', 'internalcomment', 'opmerkingen'], multi: true },
+    { key: 'remarks', label: 'Remarks', aliases: ['remarks', 'comment', 'comments', 'internalcomment', 'opmerkingen', 'internalnotes', 'detail'], multi: true },
   ];
+
+  // Groups free-text pipeline statuses from different lists into one funnel.
+  const STAGE_GROUPS = ['Not approached', 'Approached', 'Engaged', 'Passed', 'Other'];
+  function stageGroup(s) {
+    const t = lower(s);
+    if (!t) return 'Not approached';
+    if (/pass|declin|not interested|no interest|dropped|rejected|lost/.test(t)) return 'Passed';
+    if (/not (yet )?approached|^1\.|to approach|^new$/.test(t)) return 'Not approached';
+    if (/nda|\bim\b|info ?memo|meeting|session|positive|conversation|interested|review|loi|offer|due diligence|dd\b|^[5-9]\./.test(t)) return 'Engaged';
+    if (/teaser|reminder|contact|awaiting|no response|approached|sent|group level|via group|^[2-4]\./.test(t)) return 'Approached';
+    return 'Other';
+  }
+
+  // Simple ownership buckets for filtering.
+  function ownershipType(s) {
+    const t = lower(s);
+    if (!t) return '';
+    if (/listed|public|nasdaq|nyse|xetra|lse|euronext|ticker|\(.*:.*\)/.test(t)) return 'Listed';
+    if (/private equity|pe[- ]backed|\bpe\b|buyout|taken private|sponsor/.test(t)) return 'PE-backed';
+    if (/\bvc\b|venture/.test(t)) return 'VC-backed';
+    if (/subsidiary|part of|owned by|division/.test(t)) return 'Subsidiary';
+    if (/founder|family|private|employee|owner/.test(t)) return 'Private / founder';
+    return 'Other';
+  }
   const MAX_CONTACTS = 5;
   // Fuzzy "contains" matching for headers like "Status Lakeside" or "Date of last contact/note".
   // Capital IQ style headers ("Total Revenue [LTM] ($USDmm, Historical rate)") land here too.
@@ -258,6 +286,7 @@ const Engine = (() => {
     });
     company.role = normaliseRole(company.role) || (/private equity|venture capital|investment firm|family office/i.test(company.ownership || '') ? 'Investor' : '') || opts.role || '';
     if (company.linkedin_url) company.linkedin_url = cleanUrl(company.linkedin_url);
+    if (company.website && !/[a-z0-9-]\.[a-z]{2,}/i.test(company.website)) delete company.website; // e.g. "Reference", "n/a"
     if (!company.currency && (company.revenue != null || company.ebitda != null)) company.currency = opts.currency || 'EUR';
     project.remarks = project.remarks.join(' | ');
     return { company, contacts: contacts.filter(c => c && (c.name || c.email)), project };
@@ -333,7 +362,7 @@ const Engine = (() => {
       if (same) { for (const [k, v] of Object.entries(ct)) if (!isBlank(v) && isBlank(same[k])) same[k] = v; }
       else target.contacts.push({ ...ct });
     }
-    const hasProjectData = project && ['status', 'log', 'last_contact', 'responsible', 'tier', 'remarks'].some(k => !isBlank(project[k]));
+    const hasProjectData = project && ['status', 'furthest_stage', 'log', 'last_contact', 'responsible', 'tier', 'remarks', 'pass_reason', 'rationale', 'wave'].some(k => !isBlank(project[k]));
     // Plain company lists (e.g. Capital IQ screens) keep their extra columns on the company itself.
     if (project && !hasProjectData && !project.project && Object.keys(project.extra || {}).length) target.extra = { ...(target.extra || {}), ...project.extra };
     if (project && (hasProjectData || project.project)) {
@@ -372,7 +401,7 @@ const Engine = (() => {
   const hasEmail = c => !!primaryContact(c);
 
   function tokens(c) {
-    const text = [c.short_description, c.description, c.keywords, c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
+    const text = [c.short_description, c.summary, c.description, c.keywords, (c.tags || []).join(' '), c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
     return new Set(text.split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t)));
   }
 
@@ -481,7 +510,7 @@ const Engine = (() => {
   }
 
   return {
-    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
+    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
     normName, domainOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
