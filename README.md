@@ -131,7 +131,19 @@ Click **Import Excel / CSV**. You can select several files at once. For each fil
    - **Rows:** untick the rows you don't want. The filter box helps, e.g. type `oud` and click Deselect.
    - **Duplicates:** a company that already exists is **merged**. It counts as existing if it has the same website, Capital IQ ID, LinkedIn page or name (ignoring GmbH/BV/Group etc.). Near-matches are flagged in orange for you to decide.
 
-Use **Find duplicates** to clean up afterwards, or merge two companies by hand via **Edit**.
+### Duplicates: one record per company, without losing data
+
+On import, a company is merged automatically when it has the same **main website** (www, subdomains and paths are ignored: `en.acme.com/de` = `acme.com`), LinkedIn page, Capital IQ ID or name.
+
+**⧉ Duplicates** on the Companies page shows the rest in two groups:
+- **Certain:** the same company, safe to merge.
+- **Check these:** the same brand on another country domain (`hypoport.de` / `hypoport.com`), contact emails at the other's website (this can also be an owner or parent), or similar names.
+
+Choose the main record per group (the clearest name is preselected), untick records that shouldn't be merged, and click **Merge**. Merging is **lossless**:
+- All contacts and all project history are combined. Logs are joined, and the most recent status counts.
+- Other names become **aliases** ("Also known as"), and search finds them too.
+- Different values (another description, revenue, country) are kept under **"Other values found in your lists"**, with *use this* to swap them.
+- The merged records are stored. **Sources → Restore as separate company** undoes a merge.
 
 ## 5. Connect Outlook (one-time Azure setup, about 5 minutes)
 

@@ -161,8 +161,11 @@ function overviewHtml(proj) {
 
     <div class="card span2">
       <h2>Precedent acquisitions by matching buyers</h2>
-      ${precedents.length ? `<table class="compact"><thead><tr><th>Year</th><th>Buyer</th><th>Target</th><th>Description</th></tr></thead><tbody>
-        ${precedents.map(a => `<tr><td>${esc(a.year || '')}</td><td><button class="link" data-open="${a.buyer.id}">${esc(a.buyer.name)}</button></td><td><b>${esc(a.target)}</b></td><td class="small muted">${esc(a.description || '')}${a.source_url ? ` <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</td></tr>`).join('')}
+      ${precedents.length ? `<table class="compact"><thead><tr><th>Date</th><th>Buyer</th><th>Target</th><th>Industry</th><th>Size</th><th>Description</th></tr></thead><tbody>
+        ${precedents.map(a => `<tr><td class="small">${esc(a.date || a.year || '')}</td><td><button class="link" data-open="${a.buyer.id}">${esc(a.buyer.name)}</button></td>
+          <td><b>${esc(a.target)}</b>${a.target_website ? ` <a class="ext" href="${esc(Engine.cleanUrl(a.target_website))}" target="_blank" rel="noopener">↗</a>` : ''}</td>
+          <td class="small">${esc(a.industry || '')}</td><td class="small">${esc([a.deal_value, a.target_revenue && 'rev. ' + a.target_revenue, a.target_employees && a.target_employees + ' FTE'].filter(Boolean).join(' · '))}</td>
+          <td class="small muted">${esc(a.description || '')}${a.source_url ? ` <a href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</td></tr>`).join('')}
       </tbody></table>` : `<div class="empty">Acquisitions appear here once matching buyers have been researched (Export for research → Import research).</div>`}
     </div>
   </div>`;

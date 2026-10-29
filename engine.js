@@ -384,9 +384,24 @@ const Engine = (() => {
     .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/^(dr|mr|mrs|ms|prof|ir|drs|ing|mag)\.?\s+/g, '').replace(/[^a-z]/g, '');
   const linkedinKey = u => lower(u).replace(/^https?:\/\/([a-z]{2,3}\.)?(www\.)?/, '').replace(/\/+$/, '');
 
+  // The registrable domain: "en.shop.acme.co.uk/de" -> "acme.co.uk". Sites like LinkedIn aren't a company's own website.
+  const SLD = new Set('co.uk org.uk ac.uk com.au net.au co.nz com.br co.jp com.cn co.za com.sg com.tr co.in com.mx com.ar co.il com.hk com.tw co.kr com.my com.ph co.at or.at'.split(' '));
+  const NOT_COMPANY = new Set('linkedin.com google.com facebook.com twitter.com x.com wikipedia.org crunchbase.com github.com github.io wordpress.com wixsite.com bloomberg.com youtube.com xing.com instagram.com'.split(' '));
+  function rootDomain(url) {
+    const h = domainOf(url);
+    if (!h || !h.includes('.') || /^\d+(\.\d+){3}$/.test(h)) return '';
+    const parts = h.split('.');
+    const root = parts.slice(SLD.has(parts.slice(-2).join('.')) ? -3 : -2).join('.');
+    return NOT_COMPANY.has(root) ? '' : root;
+  }
+  // "x-tention.com" and "x-tention.at" share the brand "x-tention".
+  const brandOf = url => { const b = rootDomain(url).split('.')[0]; return b.length >= 4 ? b : ''; };
+  const FREEMAIL = new Set('gmail.com googlemail.com outlook.com hotmail.com live.com yahoo.com icloud.com me.com gmx.de gmx.net web.de t-online.de proton.me protonmail.com aol.com msn.com'.split(' '));
+  const emailDomains = c => [...new Set((c.contacts || []).map(x => String(x.email || '').split('@')[1]).filter(d => d && !FREEMAIL.has(d)).map(rootDomain).filter(Boolean))];
+
   // Lookup maps so duplicate checks stay fast with tens of thousands of companies.
   function buildIndex(list) {
-    const idx = { byNorm: new Map(), byDomain: new Map(), byKey: new Map(), byFirst: new Map() };
+    const idx = { byNorm: new Map(), byDomain: new Map(), byKey: new Map(), byFirst: new Map(), byBrand: new Map(), byMail: new Map() };
     list.forEach(c => indexAdd(idx, c));
     return idx;
   }
@@ -394,34 +409,96 @@ const Engine = (() => {
   function indexAdd(idx, c) {
     const n = c._norm ?? normName(c.name);
     push(idx.byNorm, n, c);
-    push(idx.byDomain, c._domain ?? domainOf(c.website), c);
+    push(idx.byDomain, rootDomain(c.website), c);
+    push(idx.byBrand, brandOf(c.website), c);
+    emailDomains(c).forEach(d => push(idx.byMail, d, c));
     if (c.capiq_id) push(idx.byKey, 'ciq:' + lower(c.capiq_id), c);
     if (c.linkedin_url) push(idx.byKey, 'li:' + linkedinKey(c.linkedin_url), c);
     push(idx.byFirst, n.split(' ')[0], c);
   }
 
-  // Exact: same website domain, Capital IQ ID, LinkedIn page or cleaned name. Possible: one name is the start of the other.
+  // Exact: same main website domain, Capital IQ ID, LinkedIn page or cleaned name.
+  // Possible: same brand on another country domain, contacts' email domain = the other's website, or one name starts the other.
   function findDuplicates(company, listOrIndex) {
     const idx = Array.isArray(listOrIndex) ? buildIndex(listOrIndex) : listOrIndex;
-    const n = normName(company.name), d = domainOf(company.website);
+    const n = normName(company.name), d = rootDomain(company.website);
     const exact = new Set();
     for (const c of [...(idx.byNorm.get(n) || []), ...(d ? idx.byDomain.get(d) || [] : []),
       ...(company.capiq_id ? idx.byKey.get('ciq:' + lower(company.capiq_id)) || [] : []),
       ...(company.linkedin_url ? idx.byKey.get('li:' + linkedinKey(company.linkedin_url)) || [] : [])]) if (c !== company) exact.add(c);
-    const possible = [];
+    const possible = new Set();
+    const add = c => { if (c !== company && !exact.has(c)) possible.add(c); };
     if (n.length >= 4) for (const c of idx.byFirst.get(n.split(' ')[0]) || []) {
-      if (c === company || exact.has(c)) continue;
       const cn = c._norm ?? normName(c.name);
-      if (cn.length >= 4 && (cn.startsWith(n + ' ') || n.startsWith(cn + ' ') || n.replace(/ /g, '') === cn.replace(/ /g, ''))) possible.push(c);
+      if (cn.length >= 4 && (cn.startsWith(n + ' ') || n.startsWith(cn + ' ') || n.replace(/ /g, '') === cn.replace(/ /g, ''))) add(c);
     }
-    return { exact: [...exact], possible };
+    const b = brandOf(company.website);
+    if (b) (idx.byBrand.get(b) || []).forEach(add);
+    if (d) (idx.byMail.get(d) || []).forEach(add);
+    for (const e of emailDomains(company)) (idx.byDomain.get(e) || []).forEach(add);
+    return { exact: [...exact], possible: [...possible] };
+  }
+
+  // Why two records look like the same company (for the review screen).
+  function duplicateReason(a, b) {
+    const ra = rootDomain(a.website), rb = rootDomain(b.website);
+    if (ra && ra === rb) return { certain: true, text: `Same website (${ra})` };
+    if (a.linkedin_url && b.linkedin_url && linkedinKey(a.linkedin_url) === linkedinKey(b.linkedin_url)) return { certain: true, text: 'Same LinkedIn page' };
+    if (a.capiq_id && b.capiq_id && lower(a.capiq_id) === lower(b.capiq_id)) return { certain: true, text: 'Same Capital IQ ID' };
+    if (normName(a.name) === normName(b.name)) return { certain: true, text: 'Same name' };
+    if (brandOf(a.website) && brandOf(a.website) === brandOf(b.website)) return { certain: false, text: `Same brand on another domain (${ra} / ${rb})` };
+    if ((ra && emailDomains(b).includes(ra)) || (rb && emailDomains(a).includes(rb))) return { certain: false, text: `Contact emails at ${ra && emailDomains(b).includes(ra) ? ra : rb} (same company, or owner / parent?)` };
+    return { certain: false, text: 'Similar name' };
+  }
+
+  // All duplicate groups in a list: certain groups (merge safely) and likely groups (check first).
+  function duplicateGroups(list) {
+    const idx = buildIndex(list);
+    const parent = new Map(list.map(c => [c, c]));
+    const find = c => { while (parent.get(c) !== c) { parent.set(c, parent.get(parent.get(c))); c = parent.get(c); } return c; };
+    const union = (a, b) => { const x = find(a), y = find(b); if (x !== y) parent.set(y, x); };
+    const possibleLinks = [];
+    for (const c of list) {
+      const d = findDuplicates(c, idx);
+      d.exact.forEach(x => union(c, x));
+      d.possible.forEach(x => possibleLinks.push([c, x]));
+    }
+    const groupsOf = () => { const g = new Map(); for (const c of list) { const r = find(c); if (!g.has(r)) g.set(r, []); g.get(r).push(c); } return [...g.values()]; };
+    const certain = groupsOf().filter(g => g.length > 1);
+    const certainOf = new Map(list.map(c => [c, find(c)]));
+    // Likely groups: link certain groups (or singles) through the possible links.
+    const lp = new Map(list.map(c => [certainOf.get(c), certainOf.get(c)]));
+    const lfind = c => { while (lp.get(c) !== c) c = lp.get(c); return c; };
+    for (const [a, b] of possibleLinks) { const x = lfind(certainOf.get(a)), y = lfind(certainOf.get(b)); if (x !== y) lp.set(y, x); }
+    const likelyMap = new Map();
+    for (const c of list) { const r = lfind(certainOf.get(c)); if (!likelyMap.has(r)) likelyMap.set(r, []); likelyMap.get(r).push(c); }
+    const likely = [...likelyMap.values()].filter(g => g.length > 1 && new Set(g.map(c => certainOf.get(c))).size > 1);
+    const describe = g => ({ members: g, reasons: [...new Set(g.slice(1).map(x => duplicateReason(g[0], x).text))] });
+    return { certain: certain.map(describe), likely: likely.map(describe) };
   }
 
   const isBlank = v => v === '' || v == null;
+  // Values that look the same ignoring case and punctuation are not a conflict.
+  const sameValue = (x, y) => typeof x === 'number' && typeof y === 'number' ? Math.abs(x - y) < 1e-9 : lower(String(x)).replace(/[^a-z0-9]/g, '') === lower(String(y)).replace(/[^a-z0-9]/g, '');
+  const NO_ALT = new Set(['id', 'contacts', 'projects', 'sources', 'acquisitions', 'enrichment', '_norm', '_domain', 'alt', 'aliases', 'merged_from', 'merged_records', 'created', 'status', 'tags', 'extra', 'role']);
+  // Keeps a conflicting value from another list instead of dropping it.
+  function keepAlt(target, k, v) {
+    if (NO_ALT.has(k) || isBlank(v) || isBlank(target[k]) || sameValue(target[k], v)) return;
+    if (k === 'name') { target.aliases ??= []; if (!target.aliases.some(a => sameValue(a, v))) target.aliases.push(v); return; }
+    if (k === 'website' && rootDomain(v) && rootDomain(v) === rootDomain(target[k])) return;
+    target.alt ??= {};
+    const list = (target.alt[k] ??= []);
+    if (!list.some(x => sameValue(x, v))) list.push(v);
+  }
+  // Joins history text from two sources without repeating lines.
+  const joinText = (a, b, sep) => { const parts = [...String(a || '').split(sep), ...String(b || '').split(sep)].map(s => s.trim()).filter(Boolean); return [...new Set(parts)].join(sep); };
 
-  // Merges parsed row data into an existing company. Blank fields are filled; existing values win.
-  function mergeInto(target, { company, contacts = [], project }) {
-    for (const [k, v] of Object.entries(company)) if (!isBlank(v) && isBlank(target[k])) target[k] = v;
+  // Merges parsed row data into an existing company. Blank fields are filled; other values are kept as alternatives.
+  function mergeInto(target, { company, contacts = [], project }, combine = false) {
+    for (const [k, v] of Object.entries(company)) {
+      if (isBlank(v)) continue;
+      if (isBlank(target[k])) target[k] = v; else keepAlt(target, k, v);
+    }
     target.contacts ??= [];
     for (const ct of contacts) {
       const same = target.contacts.find(x => (ct.email && x.email === ct.email) || (ct.linkedin && x.linkedin && linkedinKey(x.linkedin) === linkedinKey(ct.linkedin)) || (!ct.email || !x.email) && ct.name && personKey(x.name) === personKey(ct.name));
@@ -435,12 +512,8 @@ const Engine = (() => {
       if (!project.project) project = { ...project, project: String(project.source || 'List').split(' › ')[0].replace(/\.[^.]+$/, '') };
       target.projects ??= [];
       const p = target.projects.find(x => x.project === project.project);
-      if (p) {
-        // The newest upload of the same project wins for status fields.
-        for (const [k, v] of Object.entries(project)) if (k !== 'extra' && !isBlank(v)) p[k] = v;
-        p.extra = { ...(p.extra || {}), ...(project.extra || {}) };
-        if (project.source && !String(p.source).includes(project.source)) p.source = [p.source, project.source].filter(Boolean).join('; ');
-      } else target.projects.push({ ...project });
+      if (p) mergeProjectEntry(p, project, combine);
+      else target.projects.push({ ...project });
     }
     if (project?.source) {
       target.sources ??= [];
@@ -451,15 +524,65 @@ const Engine = (() => {
     return target;
   }
 
-  // Merges company `b` into `a` (manual merge).
+  // Same project from two sources. On import the newest upload wins for the status; when combining two
+  // company records the furthest / most recent status wins. History text is always joined, never overwritten.
+  function mergeProjectEntry(p, q, combine) {
+    const takeQ = !combine || (isBlank(p.status) && !isBlank(q.status)) ||
+      (!isBlank(q.status) && ((q.last_contact || '') > (p.last_contact || '') || (!(q.last_contact || p.last_contact) && stageIndex(q.status) > stageIndex(p.status))));
+    for (const [k, v] of Object.entries(q)) {
+      if (isBlank(v) || ['extra', 'log', 'remarks', 'rationale', 'pass_reason', 'source', 'dates', 'offer', 'offer_history'].includes(k)) continue;
+      if (isBlank(p[k]) || (takeQ && ['status', 'last_contact', 'responsible', 'tier', 'wave'].includes(k))) p[k] = v;
+    }
+    if (q.furthest_stage && reachedIndex({ status: q.furthest_stage }) > reachedIndex(p)) p.furthest_stage = q.furthest_stage;
+    p.log = joinText(q.log, p.log, '\n');
+    p.remarks = joinText(p.remarks, q.remarks, ' | ');
+    p.rationale = joinText(p.rationale, q.rationale, ' | ');
+    p.pass_reason = joinText(p.pass_reason, q.pass_reason, ' | ');
+    p.source = joinText(p.source, q.source, '; ');
+    p.extra = { ...(q.extra || {}), ...(p.extra || {}) };
+    if (q.dates) { p.dates ??= {}; for (const [k, v] of Object.entries(q.dates)) if (!p.dates[k] || v < p.dates[k]) p.dates[k] = v; }
+    if (q.offer) { if (!p.offer) p.offer = q.offer; else if (p.offer !== q.offer) (p.offer_history ??= []).push(q.offer); }
+    if (q.offer_history?.length) p.offer_history = [...(p.offer_history || []), ...q.offer_history];
+    for (const k of ['log', 'remarks', 'rationale', 'pass_reason', 'source']) if (!p[k]) delete p[k];
+  }
+
+  // Merges company `b` into `a` without losing anything: conflicting values become alternatives, other names become
+  // aliases, contacts and project history are combined, and `b` itself is kept in merged_records so it can be restored.
   function mergeCompanies(a, b) {
-    mergeInto(a, { company: Object.fromEntries(Object.entries(b).filter(([k]) => !['id', 'contacts', 'projects', 'sources', 'acquisitions', 'enrichment', '_norm', '_domain'].includes(k))), contacts: b.contacts || [] });
-    if (!a.acquisitions?.length && b.acquisitions?.length) a.acquisitions = b.acquisitions;
-    if (!a.enrichment && b.enrichment) a.enrichment = b.enrichment;
-    for (const p of b.projects || []) mergeInto(a, { company: {}, project: p });
-    a.sources ??= [];
-    for (const s of b.sources || []) if (!a.sources.includes(s)) a.sources.push(s);
+    const { _norm, _domain, ...snapshot } = b;
+    mergeInto(a, { company: Object.fromEntries(Object.entries(b).filter(([k]) => !NO_ALT.has(k) || k === 'role')), contacts: b.contacts || [] }, true);
+    keepAlt(a, 'name', b.name);
+    for (const al of b.aliases || []) keepAlt(a, 'name', al);
+    for (const [k, vals] of Object.entries(b.alt || {})) vals.forEach(v => (isBlank(a[k]) ? (a[k] = v) : keepAlt(a, k, v)));
+    if (b.acquisitions?.length) {
+      a.acquisitions ??= [];
+      for (const q of b.acquisitions) if (!a.acquisitions.some(x => sameValue(x.target, q.target))) a.acquisitions.push(q);
+    }
+    if (b.enrichment && (!a.enrichment || (b.enrichment.at || '') > (a.enrichment.at || ''))) a.enrichment = b.enrichment;
+    if (b.tags?.length) a.tags = [...new Set([...(a.tags || []), ...b.tags])];
+    if (b.extra) a.extra = { ...b.extra, ...(a.extra || {}) };
+    a.projects ??= [];
+    for (const p of b.projects || []) {
+      const mine = a.projects.find(x => x.project === p.project);
+      if (mine) mergeProjectEntry(mine, p, true); else a.projects.push({ ...p });
+    }
+    a.sources = [...new Set([...(a.sources || []), ...(b.sources || [])])];
+    a.merged_from = [...(a.merged_from || []), { id: b.id, name: b.name, website: b.website || '', at: new Date().toISOString() }];
+    a.merged_records = [...(a.merged_records || []), JSON.parse(JSON.stringify(snapshot))];
+    a._norm = normName(a.name);
+    a._domain = domainOf(a.website);
     return a;
+  }
+
+  // Picks the record to keep: the one with the most information.
+  function richness(c) {
+    // Data counts, but the group's "headline" record should have a clean name ("ABBYY", not "ABBYY Europe GmbH")
+    // and a plain website (not a country sub-page).
+    const site = lower(c.website).replace(/^https?:\/\//, '').replace(/\/+$/, '');
+    return (c.contacts || []).length * 2 + (c.projects || []).length * 3 + (c.website ? 3 : 0) + (c.enrichment ? 5 : 0)
+      + Object.values(c).filter(v => typeof v === 'string' && v).length * 0.2
+      - String(c.name || '').length * 0.15 - (/\/./.test(site) ? 4 : 0)
+      - (/\b(europe|deutschland|germany|nederland|benelux|uk|france|gmbh|bv|ltd|inc|ag|sa|holding)\b/i.test(c.name || '') ? 3 : 0);
   }
 
   // ---------- Matching ----------
@@ -551,10 +674,16 @@ const Engine = (() => {
   }
 
   // Serial acquirers and PE-backed platforms (add-on buyers) are more likely to buy.
-  function appetiteScore(cand) {
+  function appetiteScore(cand, deal) {
     const acq = (cand.acquisitions || []).length;
     const tags = (cand.tags || []).join(' ');
-    const said = cand.enrichment?.is_acquisitive;
+    const said = cand.acquisitive || cand.enrichment?.is_acquisitive;
+    // Strongest signal: the buyer already bought something in the deal's space.
+    const phrases = deal ? [...new Set([...splitList(deal.keywords), ...segments(deal.sector || '')].filter(p => p.length > 2 && !GENERIC.has(p)))] : [];
+    if (phrases.length) {
+      const hit = (cand.acquisitions || []).find(a => { const t = ' ' + lower([a.industry, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; return phrases.some(p => t.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ')); });
+      if (hit) return [1, `Bought ${hit.target}${hit.date || hit.year ? ` (${String(hit.date || hit.year).slice(0, 4)})` : ''}${hit.industry ? ': ' + hit.industry : ''}`];
+    }
     if (acq >= 3 || said === 'yes' || /serial acquirer|acquisitive|buy-and-build|consolidator/.test(tags)) return [1, acq ? `${acq} acquisitions` : 'Acquisitive'];
     if (acq >= 1 || said === 'some') return [0.7, `${acq || 'Some'} acquisition${acq === 1 ? '' : 's'}`];
     if (ownershipType(cand.ownership) === 'PE-backed') return [0.6, 'PE-backed (add-on buyer)'];
@@ -589,7 +718,7 @@ const Engine = (() => {
           size: sizeScore(deal, c, candIsBuyerSide),
           keywords: keywordScore(dealTokens, c, deal),
           role: roleScore(deal, c),
-          appetite: appetiteScore(c),
+          appetite: appetiteScore(c, deal),
           history: historyScore(c, deal),
         };
         let sum = 0;
@@ -622,7 +751,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    normName, domainOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

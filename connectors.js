@@ -66,6 +66,41 @@ async function importPeopleFile(d) {
   toast(`People imported: ${people} new contacts at ${companies} companies.`, 7000);
 }
 
+// ---------- Acquisition track records (research files from Claude Code) ----------
+const acqKey = a => Engine.normName(a.target || '');
+const acqDate = a => String(a.date || a.year || '');
+// Merges researched deals into a company: new deals are added, known ones get missing details filled.
+function mergeAcquisitions(c, list) {
+  c.acquisitions ??= [];
+  let added = 0;
+  for (const a of list || []) {
+    if (!a.target) continue;
+    const same = c.acquisitions.find(x => acqKey(x) === acqKey(a));
+    if (same) { for (const [k, v] of Object.entries(a)) if (v && !same[k]) same[k] = v; }
+    else { c.acquisitions.push({ ...a, year: a.year || acqDate(a).slice(0, 4) }); added++; }
+  }
+  c.acquisitions.sort((x, y) => acqDate(y).localeCompare(acqDate(x)));
+  return added;
+}
+async function importAcquisitions(d) {
+  const idx = Engine.buildIndex(state.companies);
+  let companies = 0, deals = 0;
+  for (const it of d.companies || []) {
+    const c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name || '', website: it.website || '' }, idx).exact[0];
+    if (!c) continue;
+    deals += mergeAcquisitions(c, it.acquisitions);
+    if (it.acquisitive && it.acquisitive !== 'unknown') c.acquisitive = it.acquisitive;
+    if (it.notes) c.acq_notes = it.notes;
+    c.acq_checked_at = d.created || new Date().toISOString();
+    touch(c);
+    companies++;
+  }
+  await flush();
+  renderCompanies();
+  if (state.drawer) renderDrawer();
+  toast(`Acquisitions imported: ${deals} deals for ${companies} companies.`, 7000);
+}
+
 // ---------- Apollo API via proxy ----------
 async function apollo(path, query, body) {
   const url = state.settings.apolloProxyUrl;

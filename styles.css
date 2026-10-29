@@ -204,6 +204,7 @@ input.mult { width: 46px; padding: 2px 4px; text-align: right; font-size: 13px; 
 .kpi .v { font-size: 26px; font-weight: 700; margin-top: 2px; }
 .dash-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 @media (max-width: 1100px) { .dash-grid { grid-template-columns: 1fr; } }
+.dash-grid .span2 { grid-column: 1 / -1; }
 .actions-list { display: flex; flex-direction: column; gap: 4px; }
 .action { display: flex; align-items: center; gap: 10px; text-align: left; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; cursor: pointer; }
 .action:hover { border-color: var(--accent); background: #fafbff; }
@@ -245,6 +246,15 @@ input.mult { width: 46px; padding: 2px 4px; text-align: right; font-size: 13px; 
 .connector li { margin-bottom: 4px; }
 .span-all { grid-column: 1 / -1; }
 .chip.heat { font-weight: 600; }
+
+/* ---------- Duplicates ---------- */
+.dup-list { display: flex; flex-direction: column; gap: 10px; max-height: 62vh; overflow: auto; }
+.dup-group { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.dup-group.on { border-color: var(--accent); background: #fafbff; }
+.dg-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.dg-head label { margin: 0; }
+.merged-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin-bottom: 6px; }
+.alt-values table td { vertical-align: top; }
 
 /* ---------- Research queue ---------- */
 .queue { position: fixed; right: 20px; bottom: 20px; width: 340px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px rgba(15,23,42,.18); padding: 14px; z-index: 15; }

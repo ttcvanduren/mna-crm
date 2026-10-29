@@ -50,7 +50,7 @@
           </div>
           <div class="actions">
             <button class="btn" id="downloadTemplate">Template</button>
-            <button class="btn" id="findDuplicates">Find duplicates</button>
+            <button class="btn" id="findDuplicates">⧉ Duplicates</button>
             <button class="btn" id="addCompany">+ Add company</button>
             <label class="btn" title="Import a research file made by Claude Code">✦ Import research
               <input type="file" id="importResearch" accept=".json" hidden>
@@ -83,6 +83,7 @@
           </select>
           <label class="check"><input type="checkbox" id="filterEmail"> Has email</label>
           <label class="check"><input type="checkbox" id="filterMulti"> In 2+ projects</label>
+          <label class="check"><input type="checkbox" id="filterAcq"> Acquisitive (3+ deals)</label>
           <button class="btn ghost sm" id="clearFilters">Clear filters</button>
         </div>
 
@@ -107,6 +108,7 @@
               <th data-sort="employees" class="num">Employees</th>
               <th data-sort="revenue" class="num">Revenue</th>
               <th data-sort="people">People</th>
+              <th data-sort="deals" title="Acquisitions / investments recorded">Deals</th>
               <th>Projects</th>
               <th data-sort="enriched">Research</th>
             </tr></thead>
@@ -298,6 +300,9 @@
 
   <!-- Project dialog -->
   <dialog id="projectDialog"><form method="dialog" id="projectForm"></form></dialog>
+
+  <!-- Duplicate review -->
+  <dialog id="dupDialog" class="wide"><div id="dupBody"></div></dialog>
 
   <!-- Import wizard -->
   <dialog id="importDialog" class="wide"><div id="importBody"></div></dialog>

@@ -168,11 +168,12 @@ function filteredCompanies() {
     (!own || Engine.ownershipType(c.ownership) === own) &&
     (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
     (!multi || c.projects.length > 1) &&
+    (!$('#filterAcq').checked || (c.acquisitions || []).length >= 3) &&
     (!enr || (enr === 'yes') === !!c.enrichment) &&
     (!email || Engine.hasEmail(c)) &&
-    (!q || [c.name, c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
+    (!q || [c.name, (c.aliases || []).join(' '), c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
   const { key, dir } = state.sort;
-  const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
+  const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
   return list.sort((a, b) => {
     const x = val(a), y = val(b);
     if (x == null || x === '') return 1;
@@ -201,6 +202,7 @@ function renderCompanies() {
       <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
       <td class="num">${money(c, c.revenue)}</td>
       <td>${c.contacts.length ? `${c.contacts.length}${emails ? ` <span class="muted small">· ${emails} ✉</span>` : ''} ${tags.map(t => `<span class="tag k">${esc(tagShort(t))}</span>`).join('')}` : '<span class="muted">–</span>'}</td>
+      <td>${(c.acquisitions || []).length ? `<button class="link" data-deals="${c.id}" title="${esc(c.acquisitions.slice(0, 5).map(a => `${a.date || a.year || ''} ${a.target}${a.industry ? ' – ' + a.industry : ''}`).join('\n'))}"><b>${c.acquisitions.length}</b> <span class="muted small">last ${esc(String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4))}</span></button>` : (c.acq_checked_at ? '<span class="muted small">none</span>' : '<span class="muted">–</span>')}</td>
       <td class="wrap">${projectChips(c)}</td>
       <td>${c.enrichment ? `<span class="chip purple" title="${esc(c.enrichment.model)}">✦ ${ago(c.enrichment.at)}</span>` : state.queue?.pending?.includes(c.id) ? '<span class="chip amber">queued</span>' : '<span class="muted small">—</span>'}</td>
     </tr>`;
@@ -233,7 +235,7 @@ function renderBulkBar() {
 
 let searchTimer;
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.limit = 200; renderCompanies(); }, 150); });
-const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti'];
+const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti', '#filterAcq'];
 FILTERS.forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
 $('#clearFilters').addEventListener('click', () => {
   FILTERS.forEach(s => { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
@@ -243,7 +245,7 @@ $('#clearFilters').addEventListener('click', () => {
 $('#companyTable thead').addEventListener('click', e => {
   const k = e.target.closest('th')?.dataset.sort;
   if (!k) return;
-  state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (['employees', 'revenue', 'people', 'enriched'].includes(k) ? -1 : 1) };
+  state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (['employees', 'revenue', 'people', 'deals', 'enriched'].includes(k) ? -1 : 1) };
   renderCompanies();
 });
 $('#companyTable tbody').addEventListener('click', e => {
@@ -253,6 +255,8 @@ $('#companyTable tbody').addEventListener('click', e => {
     return renderBulkBar();
   }
   if (e.target.closest('a')) return;
+  const deals = e.target.closest('[data-deals]');
+  if (deals) return openDrawer(deals.dataset.deals, 'acquisitions');
   const tr = e.target.closest('tr[data-id]');
   if (tr) openDrawer(tr.dataset.id);
 });
@@ -321,6 +325,7 @@ $('#importResearch').addEventListener('change', async e => {
     const items = Array.isArray(d) ? d : d.companies;
     if (d.type === 'mna-crm-descriptions') return importDescriptions(items);
     if (d.type === 'mna-crm-people') return importPeopleFile(d);
+    if (d.type === 'mna-crm-acquisitions') return importAcquisitions(d);
     if (!Array.isArray(items) || !items.some(x => x.profile)) throw new Error('This is not a research results file.');
     const idx = Engine.buildIndex(state.companies);
     let updated = 0, added = 0, skipped = 0;
@@ -339,23 +344,95 @@ $('#importResearch').addEventListener('change', async e => {
   } catch (err) { toast('Could not import research: ' + err.message, 7000); }
 });
 
-$('#findDuplicates').addEventListener('click', async () => {
-  const idx = Engine.buildIndex(state.companies);
-  const groups = [], seen = new Set();
-  for (const c of state.companies) {
-    if (seen.has(c.id)) continue;
-    const dups = Engine.findDuplicates(c, idx).exact.filter(d => !seen.has(d.id));
-    if (dups.length) { groups.push([c, ...dups]); [c, ...dups].forEach(x => seen.add(x.id)); }
-  }
-  if (!groups.length) return toast('No duplicates found.');
-  const preview = groups.slice(0, 15).map(g => '• ' + g.map(c => c.name).join('  =  ')).join('\n');
-  if (!confirm(`Found ${groups.length} duplicate group(s):\n\n${preview}${groups.length > 15 ? '\n…' : ''}\n\nMerge them? Contacts and project history are combined.`)) return;
+// ---------- Duplicate review ----------
+// Groups records of the same company from different lists. Merging is lossless: contacts and project history are
+// combined, conflicting values are kept as alternatives and the merged records can be restored later.
+const dup = { tab: 'certain', groups: null, sel: new Set(), keep: {}, skip: new Set() };
+function openDuplicates() {
+  const g = Engine.duplicateGroups(state.companies);
+  const prep = list => list.map((x, i) => ({ ...x, key: `${x.members.map(c => c.id).sort().join('|')}`, members: [...x.members].sort((a, b) => Engine.richness(b) - Engine.richness(a)) }));
+  dup.groups = { certain: prep(g.certain), likely: prep(g.likely) };
+  dup.sel = new Set(dup.groups.certain.map(x => x.key));
+  dup.keep = {};
+  dup.skip = new Set();
+  if (!dup.groups.certain.length) dup.tab = 'likely';
+  renderDuplicates();
+  $('#dupDialog').showModal();
+}
+function renderDuplicates() {
+  const list = dup.groups[dup.tab];
+  const selected = list.filter(x => dup.sel.has(x.key));
+  const merging = selected.reduce((n, x) => n + x.members.filter(c => c.id !== (dup.keep[x.key] || x.members[0].id) && !dup.skip.has(x.key + c.id)).length, 0);
+  $('#dupBody').innerHTML = `<div class="toolbar"><h2 style="margin:0">Duplicate companies</h2><span class="spacer"></span><button class="btn" data-dup="close">Close</button></div>
+    <p class="muted small">Records of the same company from different lists. Merging keeps <b>everything</b>: all contacts, all project history, other names (as aliases) and conflicting values (as alternatives). The merged records are stored too, so you can restore them from the company's Sources tab.</p>
+    <div class="page-tabs">
+      <button data-duptab="certain" class="${dup.tab === 'certain' ? 'active' : ''}">Certain <span class="badge" style="background:var(--good)">${dup.groups.certain.length}</span></button>
+      <button data-duptab="likely" class="${dup.tab === 'likely' ? 'active' : ''}">Check these <span class="badge" style="background:#f79009">${dup.groups.likely.length}</span></button>
+    </div>
+    <p class="muted small">${dup.tab === 'certain' ? 'Same main website (ignoring www, subdomains and paths), LinkedIn page, Capital IQ ID or name.' : 'Same brand on another country domain, contact emails at the other\'s website, or similar names. These can also be parent and subsidiary, so check before merging.'}</p>
+    <div class="toolbar"><button class="btn sm" data-dup="all">Select all</button><button class="btn sm" data-dup="none">Select none</button><span class="spacer"></span>
+      <button class="btn primary" data-dup="merge" ${selected.length ? '' : 'disabled'}>Merge ${selected.length} group${selected.length === 1 ? '' : 's'} (${merging} records)</button></div>
+    <div class="dup-list">${list.slice(0, 300).map(x => {
+      const keep = dup.keep[x.key] || x.members[0].id;
+      return `<div class="dup-group ${dup.sel.has(x.key) ? 'on' : ''}">
+        <div class="dg-head"><label class="check"><input type="checkbox" data-dsel="${esc(x.key)}" ${dup.sel.has(x.key) ? 'checked' : ''}> <b>${esc(x.members[0].name)}</b></label>
+          ${x.reasons.map(r => `<span class="chip ${dup.tab === 'certain' ? 'green' : 'amber'}">${esc(r)}</span>`).join('')}</div>
+        <table class="compact"><thead><tr><th>Keep</th><th>Merge</th><th>Name</th><th>Website</th><th>Country</th><th class="num">People</th><th>Projects</th><th>From</th></tr></thead><tbody>
+        ${x.members.map(c => `<tr class="${dup.skip.has(x.key + c.id) ? 'unsel' : ''}">
+          <td><input type="radio" name="k${esc(x.key)}" data-dkeep="${esc(x.key)}" value="${c.id}" ${c.id === keep ? 'checked' : ''}></td>
+          <td>${c.id === keep ? '<span class="muted small">main</span>' : `<input type="checkbox" data-dinc="${esc(x.key + c.id)}" ${dup.skip.has(x.key + c.id) ? '' : 'checked'}>`}</td>
+          <td>${esc(c.name)}</td><td class="small">${esc(c._domain || c.website || '–')}</td><td class="small">${esc(c.country || '')}</td>
+          <td class="num">${c.contacts.length}</td><td>${projectChips(c)}</td><td class="small muted">${esc((c.sources || []).map(s => s.split(' › ')[0]).join('; ').slice(0, 60))}</td></tr>`).join('')}
+        </tbody></table></div>`;
+    }).join('') || '<div class="empty">No duplicates in this category. 🎉</div>'}</div>`;
+}
+async function mergeSelectedDuplicates() {
   const remove = [];
-  for (const [keep, ...rest] of groups) { rest.forEach(r => { Engine.mergeCompanies(keep, r); remove.push(r.id); }); touch(keep); }
+  for (const x of dup.groups[dup.tab].filter(g => dup.sel.has(g.key))) {
+    const keep = byId(dup.keep[x.key] || x.members[0].id);
+    for (const c of x.members) {
+      if (c.id === keep.id || dup.skip.has(x.key + c.id) || !byId(c.id)) continue;
+      Engine.mergeCompanies(keep, c);
+      remove.push(c.id);
+    }
+    touch(keep);
+  }
   await removeCompanies(remove);
   renderCompanies();
-  toast(`Merged ${remove.length} duplicate(s).`);
+  toast(`Merged ${remove.length} records. Nothing was deleted: everything is combined into the main record.`, 7000);
+  openDuplicates();
+}
+$('#findDuplicates').addEventListener('click', openDuplicates);
+$('#dupBody').addEventListener('click', e => {
+  const a = e.target.closest('[data-dup]')?.dataset.dup, t = e.target.closest('[data-duptab]')?.dataset.duptab;
+  if (t) { dup.tab = t; dup.sel = new Set(t === 'certain' ? dup.groups.certain.map(x => x.key) : []); return renderDuplicates(); }
+  if (a === 'close') return $('#dupDialog').close();
+  if (a === 'all') { dup.groups[dup.tab].forEach(x => dup.sel.add(x.key)); return renderDuplicates(); }
+  if (a === 'none') { dup.sel.clear(); return renderDuplicates(); }
+  if (a === 'merge') return mergeSelectedDuplicates();
 });
+$('#dupBody').addEventListener('change', e => {
+  const t = e.target;
+  if (t.dataset.dsel) t.checked ? dup.sel.add(t.dataset.dsel) : dup.sel.delete(t.dataset.dsel);
+  if (t.dataset.dkeep) { dup.keep[t.dataset.dkeep] = t.value; dup.skip.delete(t.dataset.dkeep + t.value); }
+  if (t.dataset.dinc) t.checked ? dup.skip.delete(t.dataset.dinc) : dup.skip.add(t.dataset.dinc);
+  renderDuplicates();
+});
+
+// Restores a record that was merged into `c` as a separate company again (the merged data also stays on `c`).
+function unmerge(c, i) {
+  const rec = c.merged_records?.[i];
+  if (!rec) return;
+  const restored = migrate(JSON.parse(JSON.stringify(rec)));
+  if (byId(restored.id)) restored.id = uid();
+  state.companies.push(restored);
+  c.merged_records.splice(i, 1);
+  c.merged_from?.splice(i, 1);
+  touch(c, restored);
+  renderCompanies();
+  renderDrawer();
+  toast(`${restored.name} restored as a separate company.`);
+}
 
 $('#downloadTemplate').addEventListener('click', () => {
   const headers = ['Company', 'Website', 'Role', 'Sector', 'Sub-sector', 'Country', 'City', 'Revenue (EUR m)', 'EBITDA (EUR m)', 'Employees', 'Founded', 'Ownership', 'Short description', 'Description', 'Keywords',
@@ -400,6 +477,8 @@ function renderDrawer() {
       ${c.short_description ? `<p class="lead">${esc(c.short_description)}</p>` : ''}
       ${(e?.long_description || c.summary || c.description) ? `<p class="prose">${esc(e?.long_description || c.summary || c.description)}</p>` : '<p class="muted">No description yet.</p>'}
       ${c.tags?.length ? `<div class="chips" style="margin-top:8px">${c.tags.map(t => `<span class="chip">#${esc(t)}</span>`).join('')}</div>` : ''}
+      ${c.alt && Object.keys(c.alt).length ? `<details class="small alt-values" style="margin-top:10px"><summary><b>Other values found in your lists</b> <span class="muted">(${Object.values(c.alt).flat().length})</span></summary>
+        <table class="compact">${Object.entries(c.alt).map(([k, vals]) => `<tr><td class="muted">${esc(Engine.COMPANY_FIELDS.find(f => f.key === k)?.label || k)}</td><td><b>${esc(c[k] ?? '')}</b> <span class="muted">(shown)</span>${vals.map((v, i) => `<div>${esc(v)} <button class="link small" data-act="useAlt" data-k="${esc(k)}" data-i="${i}">use this</button></div>`).join('')}</td></tr>`).join('')}</table></details>` : ''}
       ${(e?.long_description || c.summary) && c.description && c.description !== (e?.long_description || c.summary) ? `<details class="small" style="margin-top:8px"><summary>Original description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
       <div class="facts">
         ${fact('Role', c.role && roleChip(c.role))}
@@ -442,10 +521,29 @@ function renderDrawer() {
       <button class="btn primary" data-act="people">👤 Find decision makers${apolloConfigured() ? ' (Apollo)' : ''}</button></div>` + body;
     body += `<p class="muted small" style="margin-top:12px">${apolloConfigured() ? 'Apollo search is free; revealing an email costs 1 credit.' : 'Without the Apollo API this exports a request file for Claude Code + Apollo; import the result with ✦ Import research.'}</p>`;
   } else if (tab === 'acquisitions') {
-    const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.year).localeCompare(String(a.year)));
-    body = acq.length ? `<div class="timeline">${acq.map(a => `<div class="tl-item"><div class="tl-year">${esc(a.year || 'Year unknown')}</div>
-        <div><b>${esc(a.target)}</b>${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div>
-        <div class="muted">${esc(a.description || '')}</div></div>`).join('')}</div>` : `<div class="empty">No acquisitions recorded.${c.enrichment ? ' Claude found none.' : ''}</div>`;
+    const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.date || b.year || '').localeCompare(String(a.date || a.year || '')));
+    const years = acq.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
+    const recent = years.filter(y => y >= new Date().getFullYear() - 5).length;
+    const inds = Object.entries(acq.reduce((m, a) => { if (a.industry) m[a.industry] = (m[a.industry] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    body = acq.length ? `<div class="facts" style="margin-top:0">
+        <div class="fact"><div class="k">Deals recorded</div><div class="v">${acq.length}</div></div>
+        <div class="fact"><div class="k">Last 5 years</div><div class="v">${recent}</div></div>
+        <div class="fact"><div class="k">Most recent</div><div class="v">${esc(String(acq[0].date || acq[0].year || '–'))}</div></div>
+        <div class="fact"><div class="k">Acquisitive</div><div class="v">${esc(c.acquisitive || c.enrichment?.is_acquisitive || '–')}</div></div>
+      </div>
+      ${inds.length ? `<div class="chips" style="margin:10px 0">${inds.map(([k, n]) => `<span class="chip purple">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('')}</div>` : ''}
+      ${c.acq_notes ? `<p class="muted small">${esc(c.acq_notes)}</p>` : ''}
+      <div class="timeline">${acq.map(a => {
+        const size = [a.deal_value && `Deal value ${a.deal_value}`, a.target_revenue && `Revenue ${a.target_revenue}`, a.target_employees && `${a.target_employees} employees`].filter(Boolean).join(' · ');
+        const site = a.target_website ? Engine.cleanUrl(a.target_website) : '';
+        return `<div class="tl-item"><div class="tl-year">${esc(a.date || a.year || 'Date unknown')}${a.type ? ` · ${esc(a.type)}` : ''}${a.stake ? ` · ${esc(a.stake)}` : ''}</div>
+        <div class="co-line"><b>${esc(a.target)}</b>${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener">↗ ${esc(Engine.domainOf(site))}</a>` : ''}
+          ${a.industry ? `<span class="chip purple">${esc(a.industry)}</span>` : ''}${a.country ? `<span class="chip">${esc(a.country)}</span>` : ''}</div>
+        ${size ? `<div class="small"><b>${esc(size)}</b></div>` : ''}
+        <div class="muted">${esc(a.description || '')}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div></div>`;
+      }).join('')}</div>
+      ${c.acq_checked_at ? `<p class="muted small">Researched ${esc(String(c.acq_checked_at).slice(0, 10))}.</p>` : ''}`
+      : `<div class="empty">No acquisitions recorded${c.acq_checked_at ? ': none found when researched on ' + esc(String(c.acq_checked_at).slice(0, 10)) : '. Select it in the list → Export for research, or ask Claude Code to research its acquisitions'}.</div>`;
   } else if (tab === 'projects') {
     body = c.projects.map(p => `<div class="proj">
       <b>${esc(p.project || 'Project')}</b> <span class="muted small">${esc(state.projects.find(x => x.name === p.project)?.client || '')}</span> ${stageChip(p.status)}
@@ -458,6 +556,9 @@ function renderDrawer() {
       <div class="muted small">${esc(p.source || '')}</div></div>`).join('') || '<div class="empty">Not part of any project yet.</div>';
   } else if (tab === 'sources') {
     body = `<h3>Imported from</h3>${c.sources.length ? c.sources.map(s => `<div class="small">${esc(s)}</div>`).join('') : '<div class="muted small">Added by hand.</div>'}
+      ${c.merged_from?.length ? `<h3>Merged records (${c.merged_from.length})</h3><p class="muted small">These duplicates were combined into this company. Their data is included above; restore one if it was a different company.</p>
+        ${c.merged_from.map((m, i) => `<div class="merged-row"><span><b>${esc(m.name)}</b> <span class="muted small">${esc(Engine.domainOf(m.website) || '')} · merged ${esc(String(m.at).slice(0, 10))}</span></span>
+          ${c.merged_records?.[i] ? `<button class="btn sm" data-act="unmerge" data-i="${i}">Restore as separate company</button>` : ''}</div>`).join('')}` : ''}
       <h3>Claude research</h3>${e ? `<div class="small">${new Date(e.at).toLocaleString()} · ${esc(e.model)} · ${e.searches} searches · ≈ $${Number(e.usd || 0).toFixed(2)}</div>
         <ul class="small">${(e.sources || []).map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join('')}</ul>` : '<div class="muted small">Not researched yet.</div>'}`;
   }
@@ -469,7 +570,9 @@ function renderDrawer() {
             ${c.website ? `<a href="${esc(Engine.cleanUrl(c.website))}" target="_blank" rel="noopener">🌐 ${esc(c._domain || c.website)}</a>` : ''}
             ${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener">in LinkedIn ↗</a>` : ''}
             ${roleChip(c.role)}
-          </div></div>
+            ${c.merged_from?.length ? `<span class="chip purple" title="Combined from ${c.merged_from.length + 1} records">⧉ ${c.merged_from.length + 1} records combined</span>` : ''}
+          </div>
+          ${c.aliases?.length ? `<div class="muted small">Also known as: ${esc(c.aliases.join(' · '))}</div>` : ''}</div>
         <div class="drawer-actions">
           <button class="btn ${e ? '' : 'primary'}" data-act="export" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
           <button class="btn" data-act="research" ${researching ? 'disabled' : ''} title="Research directly via the Anthropic API (paid per company)">${researching ? 'Researching…' : e ? '↻ Research via API' : 'Research via API'}</button>
@@ -492,6 +595,17 @@ $('#drawer').addEventListener('click', e => {
   if (act === 'edit') openEdit(id);
   if (act === 'research') startResearch([id], { force: true });
   if (act === 'people') findDecisionMakers(id);
+  if (act === 'unmerge') { const c = byId(id); if (confirm('Restore this record as a separate company? Its data also stays on this company.')) unmerge(c, +t.dataset.i); }
+  if (act === 'useAlt') {
+    const c = byId(id), k = t.dataset.k, i = +t.dataset.i;
+    const cur = c[k];
+    c[k] = c.alt[k][i];
+    c.alt[k][i] = cur; // swap, so the previous value stays available
+    migrate(c);
+    touch(c);
+    renderDrawer();
+    renderCompanies();
+  }
   if (act === 'export') {
     const keep = new Set(state.picked);
     state.picked = new Set([id]);
@@ -1430,7 +1544,8 @@ function flatten(c) {
     const n = i ? ` ${i + 1}` : '';
     Object.assign(row, { [`Contact name${n}`]: x.name || '', [`Function${n}`]: x.title || '', [`E-mail${n}`]: x.email || '', [`Phone${n}`]: x.phone || '', [`LinkedIn${n}`]: x.linkedin || '' });
   });
-  row.Acquisitions = (c.acquisitions || []).map(a => `${a.target}${a.year ? ` (${a.year})` : ''}`).join('; ');
+  row.Acquisitions = (c.acquisitions || []).map(a => `${a.target}${a.date || a.year ? ` (${a.date || a.year})` : ''}${a.industry ? ` – ${a.industry}` : ''}${a.deal_value ? `, ${a.deal_value}` : ''}`).join('; ');
+  row['# Acquisitions'] = (c.acquisitions || []).length;
   row.Projects = c.projects.map(p => [p.project, p.status].filter(Boolean).join(': ')).join(' | ');
   row.Sources = c.sources.join('; ');
   row['Researched by Claude'] = c.enrichment ? c.enrichment.at.slice(0, 10) : '';

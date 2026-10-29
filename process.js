@@ -136,6 +136,11 @@ function renderDashboard() {
     const ff = funnelCounts(ps);
     return { t, n: ps.length, contacted: ff.contacted, nda: ff.nda, ioi: ff.ioi };
   });
+  // Deals done by buyers on active mandates in the last two years: a signal of who is buying now.
+  const cutoff = String(new Date().getFullYear() - 2);
+  const buyers = [...new Set(pairs.map(x => x.c))];
+  const recentDeals = buyers.flatMap(c => (c.acquisitions || []).map(a => ({ c, a, d: String(a.date || a.year || '') })))
+    .filter(x => x.d >= cutoff).sort((x, y) => y.d.localeCompare(x.d)).slice(0, 15);
   const tile = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="muted small">${sub}</div>` : ''}</div>`;
   const step = (label, n, base, bench) => `<div class="fstep"><div class="fbar" style="width:${Math.max(4, pct(n, f.contacted || 1))}%"></div><span><b>${n}</b> ${label}</span><span class="muted small">${base != null ? pct(n, base) + '% of previous' : ''}${bench ? ` · typical ${bench}` : ''}</span></div>`;
 
@@ -192,9 +197,19 @@ function renderDashboard() {
         ${reasonRows.length ? reasonRows.map(([k, n]) => `<div class="hbar"><span>${esc(k)}</span><div><div style="width:${pct(n, reasonRows[0][1])}%"></div></div><b>${n}</b></div>`).join('') : '<div class="empty">No passes recorded.</div>'}
         <p class="muted small">Record a reason when you drag a buyer to <b>Passed</b>; it's used to down-rank similar buyers in Find buyers.</p>
       </div>
+      <div class="card span2">
+        <h2>Recent acquisitions by your buyers <span class="muted">(since ${cutoff})</span></h2>
+        ${recentDeals.length ? `<table class="compact"><thead><tr><th>Date</th><th>Buyer</th><th>Bought</th><th>Industry</th><th>Size</th><th>Our projects</th></tr></thead><tbody>
+          ${recentDeals.map(({ c, a, d }) => `<tr><td class="small">${esc(d)}</td><td><button class="link" data-opendeal="${c.id}">${esc(c.name)}</button></td>
+            <td><b>${esc(a.target)}</b>${a.target_website ? ` <a class="ext" href="${esc(Engine.cleanUrl(a.target_website))}" target="_blank" rel="noopener">↗</a>` : ''}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source</a>` : ''}</td>
+            <td class="small">${esc(a.industry || '')}</td><td class="small">${esc([a.deal_value, a.target_revenue && 'rev. ' + a.target_revenue, a.target_employees && a.target_employees + ' FTE'].filter(Boolean).join(' · '))}</td>
+            <td>${c.projects.filter(p => active.some(x => x.name === p.project)).map(p => `<span class="chip">${esc(p.project)}</span>`).join('')}</td></tr>`).join('')}
+        </tbody></table>` : '<div class="empty">No recent acquisitions recorded yet. Import an acquisitions research file (✦ Import research) to fill this.</div>'}
+      </div>
     </div>`;
 }
 $('#dashboardView').addEventListener('click', e => {
+  if (e.target.dataset.opendeal) return openDrawer(e.target.dataset.opendeal, 'acquisitions');
   const g = e.target.closest('[data-goproj]');
   if (g) { state.projectView = g.dataset.goproj; state.projectTab = g.dataset.gotab || 'overview'; return showTab('projects'); }
   if (e.target.dataset.go) showTab(e.target.dataset.go);
