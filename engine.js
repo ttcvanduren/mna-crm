@@ -4,18 +4,26 @@ const Engine = (() => {
   // `aliases` are header names (lowercased, letters/digits only) recognised on upload.
   const COMPANY_FIELDS = [
     { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund'] },
-    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site'] },
-    { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'companytype', 'rol'] },
-    { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category'] },
-    { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory'] },
-    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'hqcountry', 'headquarters', 'contactoffice', 'office', 'location'] },
-    { key: 'region', label: 'Region', aliases: ['region', 'regio'] },
-    { key: 'revenue', label: 'Revenue', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
-    { key: 'ebitda', label: 'EBITDA', aliases: ['ebitda'], num: true, money: true },
-    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees'], num: true },
-    { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar'] },
+    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site', 'companywebsite', 'webadres'] },
+    { key: 'linkedin_url', label: 'LinkedIn page', aliases: ['companylinkedin', 'linkedinpage', 'linkedincompany', 'linkedincompanypage'] },
+    { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'rol'] },
+    { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
+    { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
+    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'hqcountry', 'headquarters', 'contactoffice', 'office', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation'] },
+    { key: 'hq_city', label: 'HQ city', aliases: ['city', 'hqcity', 'plaats', 'stad'] },
+    { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography'] },
+    { key: 'currency', label: 'Currency', aliases: ['currency', 'valuta', 'reportingcurrency'] },
+    { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
+    { key: 'ebitda', label: 'EBITDA (m)', aliases: ['ebitda'], num: true, money: true },
+    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees', 'totalemployees'], num: true },
+    { key: 'linkedin_employees', label: 'Employees on LinkedIn', aliases: ['linkedinemployees', 'employeesonlinkedin'], num: true },
+    { key: 'founded', label: 'Founded', aliases: ['founded', 'yearfounded', 'foundingyear', 'established', 'opgericht'] },
+    { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar', 'companytype', 'ownershiptype'] },
+    { key: 'ticker', label: 'Ticker', aliases: ['ticker', 'exchangeticker', 'symbol'] },
+    { key: 'capiq_id', label: 'Capital IQ ID', aliases: ['capitaliqid', 'ciqid', 'spcapitaliqid', 'capiqid', 'companyid', 'spcompanyid'] },
     { key: 'portfolio', label: 'Portfolio companies', aliases: ['portfolio', 'portfoliocompanies'] },
-    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment'], long: true },
+    { key: 'short_description', label: 'Short description', aliases: ['shortdescription', 'tagline', 'summary', 'oneliner'] },
+    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment', 'longbusinessdescription'], long: true },
     { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services'] },
     { key: 'target_sectors', label: 'Looking for sectors', aliases: ['targetsectors', 'interestsectors', 'acquisitionsectors', 'focussectors', 'focus', 'investmentfocus', 'lookingforsectors'] },
     { key: 'target_countries', label: 'Looking for countries', aliases: ['targetcountries', 'lookingforcountries', 'targetgeography', 'focuscountries', 'geographicfocus', 'focusgeography'] },
@@ -28,6 +36,7 @@ const Engine = (() => {
     { key: 'title', label: 'function', aliases: ['function', 'title', 'jobtitle', 'functie', 'position', 'contacttitle', 'contactfunction'] },
     { key: 'email', label: 'email', aliases: ['email', 'emailaddress', 'mail', 'contactemail', 'emailadres'] },
     { key: 'phone', label: 'phone', aliases: ['phone', 'telephone', 'tel', 'telefoon', 'mobile', 'phonenumber'] },
+    { key: 'linkedin', label: 'LinkedIn', aliases: ['linkedin', 'linkedinurl', 'linkedinprofile', 'contactlinkedin'] },
   ];
   // Per-project information (a buyer can appear in many projects with a different status each time).
   const PROJECT_FIELDS = [
@@ -40,7 +49,10 @@ const Engine = (() => {
   ];
   const MAX_CONTACTS = 5;
   // Fuzzy "contains" matching for headers like "Status Lakeside" or "Date of last contact/note".
-  const CONTAINS = [['lastcontact', 'project.last_contact'], ['status', 'project.status'], ['comment', 'project.remarks'], ['remark', 'project.remarks'], ['email', 'contact1.email'], ['website', 'company.website'], ['revenue', 'company.revenue'], ['ebitda', 'company.ebitda'], ['employee', 'company.employees']];
+  // Capital IQ style headers ("Total Revenue [LTM] ($USDmm, Historical rate)") land here too.
+  const CONTAINS = [['lastcontact', 'project.last_contact'], ['status', 'project.status'], ['comment', 'project.remarks'], ['remark', 'project.remarks'], ['email', 'contact1.email'],
+    ['website', 'company.website'], ['revenue', 'company.revenue'], ['ebitda', 'company.ebitda'], ['employee', 'company.employees'], ['description', 'company.description'],
+    ['industry', 'company.sector'], ['country', 'company.country'], ['founded', 'company.founded'], ['ticker', 'company.ticker'], ['linkedin', 'contact1.linkedin']];
 
   const TARGET_OPTIONS = [
     ...COMPANY_FIELDS.map(f => ({ value: 'company.' + f.key, label: f.label, group: 'Company' })),
@@ -138,6 +150,16 @@ const Engine = (() => {
     return 'm';
   }
 
+  // "($USDmm" in Capital IQ headers, "In EUR k" in title rows.
+  function detectCurrency(rows, headerRow) {
+    const text = rows.slice(0, headerRow + 1).flat().join(' ').toLowerCase();
+    if (/usd|us\$|\$/.test(text)) return 'USD';
+    if (/gbp|£/.test(text)) return 'GBP';
+    if (/\bchf\b/.test(text)) return 'CHF';
+    if (/\bsek\b/.test(text)) return 'SEK';
+    return 'EUR';
+  }
+
   function guessRoleFromSheet(name) {
     const s = lower(name);
     if (/financ|invest|private equity|\bpe\b|fund|sponsor/.test(s)) return 'Investor';
@@ -149,7 +171,7 @@ const Engine = (() => {
 
   function guessProject(filename) {
     const m = String(filename).match(/project[\s_-]+([a-z0-9]+)/i);
-    return m ? m[1][0].toUpperCase() + m[1].slice(1) : String(filename).replace(/\.[^.]+$/, '');
+    return m ? m[1][0].toUpperCase() + m[1].slice(1) : '';
   }
 
   // "€12,5m" -> 12.5, "1.2bn" -> 1200, "850k" -> 0.85. Plain numbers are multiplied by `unitMult`.
@@ -222,7 +244,8 @@ const Engine = (() => {
           const m = v.match(EMAIL_RE);
           if (m) contacts[idx].email = m[0].toLowerCase();
           else contacts[idx].note = v;
-        } else contacts[idx][key] = v;
+        } else if (key === 'linkedin') contacts[idx].linkedin = cleanUrl(v);
+        else contacts[idx][key] = v;
       } else if (scope === 'project') {
         if (key === 'remarks') { const v = clean(raw); if (v) project.remarks.push(`${norm(headers[i])}: ${v}`); }
         else if (key === 'last_contact') project.last_contact = parseDate(raw);
@@ -233,7 +256,9 @@ const Engine = (() => {
         if (v && !EMPTYISH.test(v)) project.extra[h] = v;
       }
     });
-    company.role = normaliseRole(company.role) || opts.role || '';
+    company.role = normaliseRole(company.role) || (/private equity|venture capital|investment firm|family office/i.test(company.ownership || '') ? 'Investor' : '') || opts.role || '';
+    if (company.linkedin_url) company.linkedin_url = cleanUrl(company.linkedin_url);
+    if (!company.currency && (company.revenue != null || company.ebitda != null)) company.currency = opts.currency || 'EUR';
     project.remarks = project.remarks.join(' | ');
     return { company, contacts: contacts.filter(c => c && (c.name || c.email)), project };
   }
@@ -254,17 +279,47 @@ const Engine = (() => {
     try { return new URL(/^https?:/.test(s) ? s : 'https://' + s).hostname.replace(/^www\d?\./, ''); } catch { return ''; }
   }
 
-  // Exact: same website domain or same cleaned name. Possible: one name is the start of the other.
-  function findDuplicates(company, list) {
+  function cleanUrl(u) {
+    const s = norm(u);
+    if (!s || !/[a-z0-9-]+\.[a-z]{2,}/i.test(s)) return '';
+    return (/^https?:\/\//i.test(s) ? s : 'https://' + s).replace(/[?#].*$/, '').replace(/\/+$/, '');
+  }
+  // "Thomas Bähler" = "Thomas Baehler" = "thomas bahler"
+  const personKey = s => lower(s).replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ae/g, 'a').replace(/oe/g, 'o').replace(/ue/g, 'u')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/^(dr|mr|mrs|ms|prof|ir|drs|ing|mag)\.?\s+/g, '').replace(/[^a-z]/g, '');
+  const linkedinKey = u => lower(u).replace(/^https?:\/\/([a-z]{2,3}\.)?(www\.)?/, '').replace(/\/+$/, '');
+
+  // Lookup maps so duplicate checks stay fast with tens of thousands of companies.
+  function buildIndex(list) {
+    const idx = { byNorm: new Map(), byDomain: new Map(), byKey: new Map(), byFirst: new Map() };
+    list.forEach(c => indexAdd(idx, c));
+    return idx;
+  }
+  const push = (m, k, c) => { if (!k) return; const a = m.get(k); if (a) { if (!a.includes(c)) a.push(c); } else m.set(k, [c]); };
+  function indexAdd(idx, c) {
+    const n = c._norm ?? normName(c.name);
+    push(idx.byNorm, n, c);
+    push(idx.byDomain, c._domain ?? domainOf(c.website), c);
+    if (c.capiq_id) push(idx.byKey, 'ciq:' + lower(c.capiq_id), c);
+    if (c.linkedin_url) push(idx.byKey, 'li:' + linkedinKey(c.linkedin_url), c);
+    push(idx.byFirst, n.split(' ')[0], c);
+  }
+
+  // Exact: same website domain, Capital IQ ID, LinkedIn page or cleaned name. Possible: one name is the start of the other.
+  function findDuplicates(company, listOrIndex) {
+    const idx = Array.isArray(listOrIndex) ? buildIndex(listOrIndex) : listOrIndex;
     const n = normName(company.name), d = domainOf(company.website);
-    const exact = [], possible = [];
-    for (const c of list) {
-      if (c === company) continue;
-      const cn = c._norm ?? normName(c.name), cd = c._domain ?? domainOf(c.website);
-      if ((d && cd && d === cd) || (n && n === cn)) exact.push(c);
-      else if (n.length >= 4 && cn.length >= 4 && (cn.startsWith(n + ' ') || n.startsWith(cn + ' ') || n.replace(/ /g, '') === cn.replace(/ /g, ''))) possible.push(c);
+    const exact = new Set();
+    for (const c of [...(idx.byNorm.get(n) || []), ...(d ? idx.byDomain.get(d) || [] : []),
+      ...(company.capiq_id ? idx.byKey.get('ciq:' + lower(company.capiq_id)) || [] : []),
+      ...(company.linkedin_url ? idx.byKey.get('li:' + linkedinKey(company.linkedin_url)) || [] : [])]) if (c !== company) exact.add(c);
+    const possible = [];
+    if (n.length >= 4) for (const c of idx.byFirst.get(n.split(' ')[0]) || []) {
+      if (c === company || exact.has(c)) continue;
+      const cn = c._norm ?? normName(c.name);
+      if (cn.length >= 4 && (cn.startsWith(n + ' ') || n.startsWith(cn + ' ') || n.replace(/ /g, '') === cn.replace(/ /g, ''))) possible.push(c);
     }
-    return { exact, possible };
+    return { exact: [...exact], possible };
   }
 
   const isBlank = v => v === '' || v == null;
@@ -274,11 +329,15 @@ const Engine = (() => {
     for (const [k, v] of Object.entries(company)) if (!isBlank(v) && isBlank(target[k])) target[k] = v;
     target.contacts ??= [];
     for (const ct of contacts) {
-      const same = target.contacts.find(x => (ct.email && x.email === ct.email) || (!ct.email || !x.email) && ct.name && lower(x.name) === lower(ct.name));
+      const same = target.contacts.find(x => (ct.email && x.email === ct.email) || (ct.linkedin && x.linkedin && linkedinKey(x.linkedin) === linkedinKey(ct.linkedin)) || (!ct.email || !x.email) && ct.name && personKey(x.name) === personKey(ct.name));
       if (same) { for (const [k, v] of Object.entries(ct)) if (!isBlank(v) && isBlank(same[k])) same[k] = v; }
       else target.contacts.push({ ...ct });
     }
-    if (project && (project.project || project.status || project.log || Object.keys(project.extra || {}).length)) {
+    const hasProjectData = project && ['status', 'log', 'last_contact', 'responsible', 'tier', 'remarks'].some(k => !isBlank(project[k]));
+    // Plain company lists (e.g. Capital IQ screens) keep their extra columns on the company itself.
+    if (project && !hasProjectData && !project.project && Object.keys(project.extra || {}).length) target.extra = { ...(target.extra || {}), ...project.extra };
+    if (project && (hasProjectData || project.project)) {
+      if (!project.project) project = { ...project, project: String(project.source || 'List').split(' › ')[0].replace(/\.[^.]+$/, '') };
       target.projects ??= [];
       const p = target.projects.find(x => x.project === project.project);
       if (p) {
@@ -299,7 +358,9 @@ const Engine = (() => {
 
   // Merges company `b` into `a` (manual merge).
   function mergeCompanies(a, b) {
-    mergeInto(a, { company: Object.fromEntries(Object.entries(b).filter(([k]) => !['id', 'contacts', 'projects', 'sources', '_norm', '_domain'].includes(k))), contacts: b.contacts || [] });
+    mergeInto(a, { company: Object.fromEntries(Object.entries(b).filter(([k]) => !['id', 'contacts', 'projects', 'sources', 'acquisitions', 'enrichment', '_norm', '_domain'].includes(k))), contacts: b.contacts || [] });
+    if (!a.acquisitions?.length && b.acquisitions?.length) a.acquisitions = b.acquisitions;
+    if (!a.enrichment && b.enrichment) a.enrichment = b.enrichment;
     for (const p of b.projects || []) mergeInto(a, { company: {}, project: p });
     a.sources ??= [];
     for (const s of b.sources || []) if (!a.sources.includes(s)) a.sources.push(s);
@@ -311,7 +372,7 @@ const Engine = (() => {
   const hasEmail = c => !!primaryContact(c);
 
   function tokens(c) {
-    const text = [c.description, c.keywords, c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
+    const text = [c.short_description, c.description, c.keywords, c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
     return new Set(text.split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t)));
   }
 
@@ -421,8 +482,8 @@ const Engine = (() => {
 
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
-    headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    normName, domainOf, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
+    normName, domainOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

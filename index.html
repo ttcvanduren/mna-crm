@@ -4,158 +4,256 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>M&amp;A CRM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+  <script type="module">
+    import Anthropic from 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.133.0/+esm';
+    window.Anthropic = Anthropic;
+  </script>
+  <script src="config.js"></script>
 </head>
 <body>
-  <header>
-    <h1>M&amp;A CRM</h1>
-    <nav>
-      <button class="tab active" data-tab="companies">Companies</button>
-      <button class="tab" data-tab="match">Match engine</button>
-      <button class="tab" data-tab="email">Email</button>
-      <button class="tab" data-tab="activity">Activity</button>
-      <button class="tab" data-tab="settings">Settings</button>
-    </nav>
-    <div id="account" class="account"></div>
-  </header>
-
-  <main>
-    <!-- COMPANIES -->
-    <section id="tab-companies" class="panel active">
-      <div class="toolbar">
-        <label class="btn primary">Import Excel / CSV
-          <input type="file" id="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden>
-        </label>
-        <button class="btn" id="addCompany">+ Add company</button>
-        <button class="btn" id="findDuplicates">Find duplicates</button>
-        <button class="btn" id="downloadTemplate">Download template</button>
-        <input type="search" id="search" placeholder="Search name, sector, country, contact, email…">
-        <select id="filterRole"><option value="">All roles</option></select>
-        <select id="filterProject"><option value="">All projects</option></select>
-        <span id="companyCount" class="muted"></span>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo-mark">M&amp;A</span> CRM</div>
+      <nav>
+        <button class="tab active" data-tab="companies"><span class="ico">▦</span>Companies</button>
+        <button class="tab" data-tab="match"><span class="ico">◎</span>Match engine</button>
+        <button class="tab" data-tab="email"><span class="ico">✉</span>Email</button>
+        <button class="tab" data-tab="activity"><span class="ico">≡</span>Activity</button>
+        <button class="tab" data-tab="settings"><span class="ico">⚙</span>Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <div id="syncStatus" class="small"></div>
+        <div id="account" class="small"></div>
       </div>
-      <div class="table-wrap">
-        <table id="companyTable">
-          <thead><tr>
-            <th>Name</th><th>Role</th><th>Sector</th><th>Country</th>
-            <th class="num">Revenue (m)</th><th>Contacts</th><th>Projects</th><th></th>
-          </tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+    </aside>
 
-    <!-- MATCH -->
-    <section id="tab-match" class="panel">
-      <div class="match-grid">
-        <aside class="card">
-          <h2>Find matches for</h2>
-          <input list="companyList" id="matchFor" placeholder="Type a company name…">
-          <datalist id="companyList"></datalist>
-          <div id="matchForInfo" class="muted small"></div>
-
-          <h3>Show only</h3>
-          <div id="roleFilters" class="chips"></div>
-          <label class="row"><input type="checkbox" id="onlyWithEmail" checked> Only companies with an email</label>
-          <label class="row"><input type="checkbox" id="hideContacted"> Hide companies already emailed for this deal</label>
-          <label class="row">Minimum score <input type="number" id="minScore" value="20" min="0" max="100" style="width:70px"></label>
-
-          <h3>Weights</h3>
-          <div id="weights"></div>
-          <button class="btn" id="resetWeights">Reset weights</button>
-        </aside>
-
-        <div class="card">
-          <div class="toolbar">
-            <h2 style="margin:0">Matches <span id="matchCount" class="muted"></span></h2>
-            <span class="spacer"></span>
-            <button class="btn" id="selectTop">Select top 25</button>
-            <button class="btn" id="selectNone">Clear</button>
-            <button class="btn" id="exportMatches">Export CSV</button>
-            <button class="btn primary" id="emailSelected">Email selected →</button>
+    <main>
+      <!-- COMPANIES -->
+      <section id="tab-companies" class="panel active">
+        <div class="page-head">
+          <div>
+            <h1>Companies</h1>
+            <div id="companyCount" class="muted"></div>
           </div>
-          <div class="table-wrap">
-            <table id="matchTable">
-              <thead><tr><th><input type="checkbox" id="checkAll"></th><th>Score</th><th>Company</th><th>Role</th><th>Sector</th><th>Country</th><th class="num">Revenue (m)</th><th>Email</th><th>Why</th></tr></thead>
-              <tbody></tbody>
-            </table>
+          <div class="actions">
+            <button class="btn" id="downloadTemplate">Template</button>
+            <button class="btn" id="findDuplicates">Find duplicates</button>
+            <button class="btn" id="addCompany">+ Add company</button>
+            <label class="btn" title="Import a research file made by Claude Code">✦ Import research
+              <input type="file" id="importResearch" accept=".json" hidden>
+            </label>
+            <label class="btn primary">Import Excel / CSV
+              <input type="file" id="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden>
+            </label>
           </div>
         </div>
-      </div>
-    </section>
 
-    <!-- EMAIL -->
-    <section id="tab-email" class="panel">
-      <div class="email-grid">
-        <div class="card">
-          <h2>Campaign</h2>
-          <div class="muted small" id="campaignInfo">No recipients yet. Select companies in the Match engine.</div>
-          <label>Template
-            <select id="templateSelect"></select>
-          </label>
-          <div class="toolbar">
-            <button class="btn" id="saveTemplate">Save template</button>
-            <button class="btn" id="saveTemplateAs">Save as new…</button>
-            <button class="btn" id="deleteTemplate">Delete</button>
-          </div>
-          <label>Subject <input id="subject"></label>
-          <label>Body <textarea id="body" rows="14"></textarea></label>
-          <div class="muted small">Placeholders: <code>{{first_name}}</code> <code>{{contact_name}}</code> <code>{{contact_title}}</code> <code>{{company}}</code> <code>{{sector}}</code> <code>{{country}}</code> <code>{{deal_name}}</code> <code>{{deal_sector}}</code> <code>{{deal_country}}</code> <code>{{deal_revenue}}</code> <code>{{deal_description}}</code> <code>{{sender_name}}</code></div>
-          <label>CC (optional) <input id="cc" placeholder="colleague@33equity.eu"></label>
-          <div class="toolbar">
-            <label class="row"><input type="radio" name="sendMode" value="draft" checked> Save as Outlook drafts</label>
-            <label class="row"><input type="radio" name="sendMode" value="send"> Send now</label>
-          </div>
-          <button class="btn primary big" id="sendBtn">Create drafts</button>
-          <div id="sendProgress" class="small"></div>
+        <div class="filters">
+          <input type="search" id="search" placeholder="Search companies, people, emails, descriptions…">
+          <select id="filterRole"><option value="">All roles</option></select>
+          <select id="filterProject"><option value="">All projects</option></select>
+          <select id="filterCountry"><option value="">All countries</option></select>
+          <select id="filterEnriched">
+            <option value="">Any research status</option>
+            <option value="yes">Researched by Claude</option>
+            <option value="no">Not researched yet</option>
+          </select>
+          <label class="check"><input type="checkbox" id="filterEmail"> Has email</label>
         </div>
-        <div class="card">
-          <h2>Recipients <span id="recipientCount" class="muted"></span></h2>
-          <div id="recipients"></div>
-          <h3>Preview</h3>
-          <div id="preview" class="preview"></div>
+
+        <div id="bulkBar" class="bulk-bar" hidden>
+          <span id="bulkCount"></span>
+          <button class="btn primary" id="bulkResearchExport" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
+          <button class="btn" id="bulkEnrich" title="Research directly via the Anthropic API (paid per company)">Research via API</button>
+          <button class="btn" id="bulkExport">Export</button>
+          <button class="btn danger" id="bulkDelete">Delete</button>
+          <button class="btn ghost" id="bulkClear">Clear selection</button>
         </div>
-      </div>
-    </section>
 
-    <!-- ACTIVITY -->
-    <section id="tab-activity" class="panel">
-      <div class="toolbar">
-        <input type="search" id="activitySearch" placeholder="Search activity…">
-        <button class="btn" id="exportActivity">Export CSV</button>
-      </div>
-      <div class="table-wrap">
-        <table id="activityTable">
-          <thead><tr><th>Date</th><th>Deal</th><th>Company</th><th>Email</th><th>Subject</th><th>Result</th></tr></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="table-wrap">
+          <table id="companyTable" class="data">
+            <thead><tr>
+              <th class="cb"><input type="checkbox" id="checkAllCompanies"></th>
+              <th data-sort="name">Company</th>
+              <th data-sort="role">Role</th>
+              <th data-sort="sector">Sector</th>
+              <th data-sort="country">Country</th>
+              <th data-sort="employees" class="num">Employees</th>
+              <th data-sort="revenue" class="num">Revenue</th>
+              <th data-sort="people">People</th>
+              <th>Projects</th>
+              <th data-sort="enriched">Research</th>
+            </tr></thead>
+            <tbody></tbody>
+          </table>
+          <div id="moreRows"></div>
+        </div>
+      </section>
 
-    <!-- SETTINGS -->
-    <section id="tab-settings" class="panel">
-      <div class="card narrow">
-        <h2>Microsoft / Outlook</h2>
-        <p class="muted small">Register an app in Azure once (see README) and paste its IDs here.</p>
-        <label>Application (client) ID <input id="clientId" placeholder="00000000-0000-0000-0000-000000000000"></label>
-        <label>Directory (tenant) ID <input id="tenantId" placeholder="your tenant id, or 'organizations'"></label>
-        <label>Your name (for {{sender_name}}) <input id="senderName"></label>
-        <label>Seconds between emails <input type="number" id="delaySec" min="1" value="3"></label>
-        <button class="btn primary" id="saveSettings">Save settings</button>
-        <button class="btn" id="signIn">Sign in with Microsoft</button>
-        <button class="btn" id="signOut">Sign out</button>
+      <!-- MATCH -->
+      <section id="tab-match" class="panel">
+        <div class="page-head"><div><h1>Match engine</h1><div class="muted">Find buyers for a target, or targets for a buyer.</div></div></div>
+        <div class="match-grid">
+          <aside class="card">
+            <h2>Find matches for</h2>
+            <input list="companyList" id="matchFor" placeholder="Type a company name…">
+            <datalist id="companyList"></datalist>
+            <div id="matchForInfo" class="muted small"></div>
 
-        <h2>Data</h2>
-        <p class="muted small">Your data is stored in this browser only. Back it up regularly.</p>
-        <button class="btn" id="backup">Download backup (JSON)</button>
-        <button class="btn" id="exportAll">Export all companies (Excel)</button>
-        <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
-        <button class="btn danger" id="wipe">Delete all companies</button>
-      </div>
-    </section>
-  </main>
+            <h3>Show only</h3>
+            <div id="roleFilters" class="chips"></div>
+            <label class="check"><input type="checkbox" id="onlyWithEmail" checked> Only companies with an email</label>
+            <label class="check"><input type="checkbox" id="hideContacted"> Hide companies already emailed for this deal</label>
+            <label class="row-label">Minimum score <input type="number" id="minScore" value="20" min="0" max="100" style="width:70px"></label>
+
+            <h3>Weights</h3>
+            <div id="weights"></div>
+            <button class="btn" id="resetWeights">Reset weights</button>
+          </aside>
+
+          <div class="card">
+            <div class="toolbar">
+              <h2 style="margin:0">Matches <span id="matchCount" class="muted"></span></h2>
+              <span class="spacer"></span>
+              <button class="btn" id="selectTop">Select top 25</button>
+              <button class="btn" id="selectNone">Clear</button>
+              <button class="btn" id="exportMatches">Export</button>
+              <button class="btn primary" id="emailSelected">Email selected →</button>
+            </div>
+            <div class="table-wrap">
+              <table id="matchTable" class="data">
+                <thead><tr><th class="cb"><input type="checkbox" id="checkAll"></th><th>Score</th><th>Company</th><th>Role</th><th>Sector</th><th>Country</th><th class="num">Revenue</th><th>Email</th><th>Why</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- EMAIL -->
+      <section id="tab-email" class="panel">
+        <div class="page-head"><div><h1>Email</h1><div class="muted" id="campaignInfo">No recipients yet. Select companies in the Match engine.</div></div></div>
+        <div class="email-grid">
+          <div class="card">
+            <label>Template
+              <select id="templateSelect"></select>
+            </label>
+            <div class="toolbar">
+              <button class="btn" id="saveTemplate">Save template</button>
+              <button class="btn" id="saveTemplateAs">Save as new…</button>
+              <button class="btn" id="deleteTemplate">Delete</button>
+            </div>
+            <label>Subject <input id="subject"></label>
+            <label>Body <textarea id="body" rows="14"></textarea></label>
+            <div class="muted small">Placeholders: <code>{{first_name}}</code> <code>{{contact_name}}</code> <code>{{contact_title}}</code> <code>{{company}}</code> <code>{{sector}}</code> <code>{{country}}</code> <code>{{deal_name}}</code> <code>{{deal_sector}}</code> <code>{{deal_country}}</code> <code>{{deal_revenue}}</code> <code>{{deal_description}}</code> <code>{{sender_name}}</code></div>
+            <label>CC (optional) <input id="cc" placeholder="colleague@33equity.eu"></label>
+            <div class="toolbar">
+              <label class="check"><input type="radio" name="sendMode" value="draft" checked> Save as Outlook drafts</label>
+              <label class="check"><input type="radio" name="sendMode" value="send"> Send now</label>
+            </div>
+            <button class="btn primary big" id="sendBtn">Create drafts</button>
+            <div id="sendProgress" class="small"></div>
+          </div>
+          <div class="card">
+            <h2>Recipients <span id="recipientCount" class="muted"></span></h2>
+            <div id="recipients"></div>
+            <h3>Preview</h3>
+            <div id="preview" class="preview"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ACTIVITY -->
+      <section id="tab-activity" class="panel">
+        <div class="page-head"><div><h1>Activity</h1></div>
+          <div class="actions"><input type="search" id="activitySearch" placeholder="Search activity…"><button class="btn" id="exportActivity">Export</button></div></div>
+        <div class="table-wrap">
+          <table id="activityTable" class="data">
+            <thead><tr><th>Date</th><th>Deal</th><th>Company</th><th>Recipient</th><th>Subject</th><th>Result</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="tab-settings" class="panel">
+        <div class="page-head"><div><h1>Settings</h1></div></div>
+        <div class="settings-grid">
+          <div class="card">
+            <h2>Team database</h2>
+            <div id="dbStatus" class="small"></div>
+            <div id="dbConfig">
+              <p class="muted small">Paste these from Supabase → Project Settings → API (see README). You can also put them in <code>config.js</code> so the whole team is connected automatically.</p>
+              <label>Project URL <input id="sbUrl" placeholder="https://xxxx.supabase.co"></label>
+              <label>Anon public key <input id="sbKey" placeholder="eyJ…"></label>
+              <button class="btn primary" id="saveDb">Connect</button>
+            </div>
+            <button class="btn" id="copyLocal" hidden>Copy this browser's data to the team database</button>
+            <button class="btn" id="signOutDb" hidden>Log out</button>
+          </div>
+
+          <div class="card">
+            <h2>Claude research</h2>
+            <p class="muted small">Your personal Anthropic API key. It's stored in this browser only and sent only to Anthropic. Create one at console.anthropic.com and set a monthly spend limit there.</p>
+            <label>API key <input id="anthropicKey" type="password" placeholder="sk-ant-…" autocomplete="off"></label>
+            <label>Model <select id="enrichModel"></select></label>
+            <label class="row-label">Companies researched at the same time <input type="number" id="enrichParallel" min="1" max="5" value="2" style="width:70px"></label>
+            <label class="row-label">Skip companies researched in the last <input type="number" id="enrichSkipDays" min="0" value="90" style="width:70px"> days</label>
+            <button class="btn primary" id="saveClaude">Save</button>
+            <div id="claudeSpend" class="muted small"></div>
+          </div>
+
+          <div class="card">
+            <h2>Microsoft / Outlook</h2>
+            <p class="muted small">Register an app in Azure once (see README) and paste its IDs here.</p>
+            <label>Application (client) ID <input id="clientId" placeholder="00000000-0000-0000-0000-000000000000"></label>
+            <label>Directory (tenant) ID <input id="tenantId" placeholder="your tenant id, or 'organizations'"></label>
+            <label>Your name (for {{sender_name}}) <input id="senderName"></label>
+            <label class="row-label">Seconds between emails <input type="number" id="delaySec" min="1" value="3" style="width:70px"></label>
+            <div class="toolbar">
+              <button class="btn primary" id="saveSettings">Save</button>
+              <button class="btn" id="signIn">Sign in with Microsoft</button>
+              <button class="btn" id="signOut">Sign out</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Data</h2>
+            <div class="toolbar">
+              <button class="btn" id="backup">Download backup (JSON)</button>
+              <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
+              <button class="btn" id="exportAll">Export all companies (Excel)</button>
+            </div>
+            <button class="btn danger" id="wipe">Delete all companies</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Company profile -->
+  <div id="drawerBackdrop" class="drawer-backdrop" hidden></div>
+  <aside id="drawer" class="drawer" hidden></aside>
+
+  <!-- Research queue -->
+  <div id="queue" class="queue" hidden></div>
+
+  <!-- Login (team database) -->
+  <div id="login" class="login" hidden>
+    <div class="login-card">
+      <div class="brand big"><span class="logo-mark">M&amp;A</span> CRM</div>
+      <p class="muted">Log in with your work email. We'll email you a login link.</p>
+      <input id="loginEmail" type="email" placeholder="you@33equity.eu" autocomplete="email">
+      <button class="btn primary big" id="loginBtn">Send login link</button>
+      <div id="loginMsg" class="small"></div>
+    </div>
+  </div>
 
   <!-- Edit dialog -->
   <dialog id="editDialog">
@@ -174,7 +272,9 @@
   <dialog id="importDialog" class="wide"><div id="importBody"></div></dialog>
 
   <div id="toast"></div>
+  <script src="store.js"></script>
   <script src="engine.js"></script>
+  <script src="enrich.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -1,40 +1,10 @@
-/* global Engine, XLSX, msal */
+/* global Engine, Enricher, Store, XLSX, msal */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const norm = s => String(s ?? '').replace(/\s+/g, ' ').trim();
-
-// ---------- Storage (IndexedDB, one key per collection) ----------
-const DB = {
-  _db: null,
-  open() {
-    if (this._db) return Promise.resolve(this._db);
-    return new Promise((res, rej) => {
-      const r = indexedDB.open('mna-crm', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('kv');
-      r.onsuccess = () => res((this._db = r.result));
-      r.onerror = () => rej(r.error);
-    });
-  },
-  async get(k, fallback) {
-    const db = await this.open();
-    return new Promise(res => {
-      const q = db.transaction('kv').objectStore('kv').get(k);
-      q.onsuccess = () => res(q.result ?? fallback);
-      q.onerror = () => res(fallback);
-    });
-  },
-  async set(k, v) {
-    const db = await this.open();
-    return new Promise((res, rej) => {
-      const tx = db.transaction('kv', 'readwrite');
-      tx.objectStore('kv').put(v, k);
-      tx.oncomplete = res;
-      tx.onerror = () => rej(tx.error);
-    });
-  },
-};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const DEFAULT_TEMPLATE = {
   id: 'default',
@@ -53,31 +23,38 @@ Kind regards,
 {{sender_name}}`,
 };
 
+// Personal settings stay in this browser; the company data and templates are shared via Store.
+const SETTINGS_KEY = 'crm.settings';
+const DEFAULT_SETTINGS = {
+  clientId: '', tenantId: 'organizations', senderName: '', delaySec: 3,
+  anthropicKey: '', enrichModel: Enricher.DEFAULT_MODEL, enrichParallel: 2, enrichSkipDays: 90, spend: { usd: 0, count: 0 },
+};
+function loadSettings() {
+  try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; } catch { return { ...DEFAULT_SETTINGS }; }
+}
+const saveSettingsLocal = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
+
 const state = {
   companies: [],
   templates: [DEFAULT_TEMPLATE],
   activity: [],
-  settings: { clientId: '', tenantId: 'organizations', senderName: '', delaySec: 3 },
+  settings: loadSettings(),
   weights: { ...Engine.DEFAULT_WEIGHTS },
   mappingMemory: {},
   campaign: { dealId: null, recipientIds: [] },
   contactChoice: {},
   matches: [],
-  selected: new Set(),
+  selected: new Set(), // match engine selection
+  picked: new Set(), // companies tab selection
   roleFilter: new Set(),
   previewId: null,
+  sort: { key: 'name', dir: 1 },
+  limit: 200,
+  drawer: null, // { id, tab }
+  queue: null,
 };
 
-const save = {
-  companies: () => DB.set('companies', state.companies),
-  templates: () => DB.set('templates', state.templates),
-  activity: () => DB.set('activity', state.activity),
-  settings: () => DB.set('settings', state.settings),
-  weights: () => DB.set('weights', state.weights),
-  mapping: () => DB.set('mappingMemory', state.mappingMemory),
-};
-
-function toast(msg, ms = 3000) {
+function toast(msg, ms = 3500) {
   const t = $('#toast');
   t.textContent = msg;
   t.classList.add('show');
@@ -104,89 +81,483 @@ function newCompany(name) {
   return migrate({ id: uid(), name, created: new Date().toISOString(), status: 'New', contacts: [], projects: [], sources: [] });
 }
 
+// ---------- Saving ----------
+const dirty = new Set();
+let flushTimer = null;
+function touch(...cs) {
+  cs.forEach(c => c && dirty.add(c.id));
+  clearTimeout(flushTimer);
+  flushTimer = setTimeout(flush, 500);
+}
+async function flush() {
+  if (!dirty.size) return;
+  const ids = [...dirty];
+  dirty.clear();
+  setSync('Saving…');
+  try {
+    await Store.saveCompanies(ids.map(byId).filter(Boolean), state.companies);
+    setSync('All changes saved');
+  } catch (err) {
+    ids.forEach(id => dirty.add(id));
+    setSync('Save failed – retrying', true);
+    toast('Could not save: ' + err.message, 6000);
+    flushTimer = setTimeout(flush, 8000);
+  }
+}
+async function removeCompanies(ids) {
+  const drop = new Set(ids);
+  state.companies = state.companies.filter(c => !drop.has(c.id));
+  ids.forEach(id => { dirty.delete(id); state.picked.delete(id); state.selected.delete(id); });
+  try { await Store.deleteCompanies(ids, state.companies); } catch (err) { toast('Could not delete: ' + err.message, 6000); }
+}
+const sharedTimers = {};
+function saveShared(key, value) {
+  clearTimeout(sharedTimers[key]);
+  sharedTimers[key] = setTimeout(() => Store.setState(key, value).catch(err => toast('Could not save settings: ' + err.message)), 600);
+}
+function setSync(text, bad) {
+  const where = Store.mode === 'cloud' ? `Team database${Store.user ? ' · ' + Store.user.email : ''}` : 'This browser only';
+  $('#syncStatus').innerHTML = `<span style="color:${bad ? '#f97066' : '#32d583'}">●</span> ${esc(where)}<br><span>${esc(text || '')}</span>`;
+}
+window.addEventListener('beforeunload', e => { if (dirty.size) { flush(); e.preventDefault(); } });
+
 // ---------- Tabs ----------
 function showTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'email') renderEmail();
   if (name === 'activity') renderActivity();
+  if (name === 'match') runMatch();
 }
 $$('.tab').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
-// ---------- Companies ----------
+// ---------- Small renderers ----------
+const initials = s => (norm(s).match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
+function logo(c, lg) {
+  const d = c._domain || Engine.domainOf(c.website);
+  const i = esc(initials(c.name));
+  return `<span class="co-logo ${lg ? 'lg' : ''}" data-i="${i}">${d ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=64" alt="" loading="lazy" onerror="this.parentNode.textContent=this.parentNode.dataset.i">` : i}</span>`;
+}
+const roleChip = r => r ? `<span class="chip role-${esc(r)}">${esc(r)}</span>` : '';
+const money = (c, v) => v == null || v === '' ? '' : `${c.currency && c.currency !== 'EUR' ? c.currency + ' ' : '€'}${Engine.fmt(v)}m`;
+const employeesOf = c => c.linkedin_employees ?? c.employees ?? null;
+const KEY_TAGS = new Set(['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strategy']);
+const tagShort = t => ({ 'Corporate Development': 'CorpDev', Strategy: 'Strat' }[t] || t);
+const projectChips = c => (c.projects || []).filter(p => p.project).map(p => `<span class="chip" title="${esc([p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ': ' + esc(p.status.slice(0, 22)) : ''}</span>`).join('');
+const daysAgo = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
+const ago = iso => { const d = daysAgo(iso); return d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`; };
 const contactText = c => (c.contacts || []).map(x => [x.name, x.title, x.email].join(' ')).join(' ');
-const projectChips = c => (c.projects || []).filter(p => p.project).map(p => `<span class="chip" title="${esc([p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ': ' + esc(p.status.slice(0, 24)) : ''}</span>`).join('');
 
-function renderCompanies() {
+// ---------- Companies list ----------
+function filteredCompanies() {
   const q = $('#search').value.toLowerCase().trim();
-  const role = $('#filterRole').value;
-  const project = $('#filterProject').value;
+  const role = $('#filterRole').value, project = $('#filterProject').value, country = $('#filterCountry').value;
+  const enr = $('#filterEnriched').value, email = $('#filterEmail').checked;
   const list = state.companies.filter(c =>
     (!role || c.role === role) &&
     (!project || c.projects.some(p => p.project === project)) &&
-    (!q || [c.name, c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, contactText(c)].join(' ').toLowerCase().includes(q)));
-  const shown = list.slice(0, 1000);
-  $('#companyCount').textContent = `${list.length} of ${state.companies.length} companies` + (list.length > shown.length ? ' (first 1000 shown)' : '');
-  $('#companyTable tbody').innerHTML = shown.map(c => {
-    const pc = Engine.primaryContact(c) || c.contacts[0];
-    const more = c.contacts.length > 1 ? ` <span class="muted">+${c.contacts.length - 1}</span>` : '';
-    return `<tr>
-      <td><button class="link" data-edit="${c.id}">${esc(c.name)}</button></td>
-      <td>${esc(c.role)}</td><td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
-      <td class="num">${Engine.fmt(c.revenue)}</td>
-      <td>${pc ? `${esc(pc.name)} <span class="muted small">${esc(pc.email || '')}</span>${more}` : '<span class="muted">–</span>'}</td>
-      <td class="wrap">${projectChips(c)}</td>
-      <td><button class="link" data-match="${c.id}">Find matches</button></td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="8" class="muted">No companies yet. Click "Import Excel / CSV" to add your buyer lists.</td></tr>`;
+    (!country || c.country === country) &&
+    (!enr || (enr === 'yes') === !!c.enrichment) &&
+    (!email || Engine.hasEmail(c)) &&
+    (!q || [c.name, c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, c.short_description, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
+  const { key, dir } = state.sort;
+  const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
+  return list.sort((a, b) => {
+    const x = val(a), y = val(b);
+    if (x == null || x === '') return 1;
+    if (y == null || y === '') return -1;
+    return (x > y ? 1 : x < y ? -1 : 0) * dir;
+  });
+}
 
+function renderCompanies() {
+  const list = filteredCompanies();
+  const shown = list.slice(0, state.limit);
+  $('#companyCount').textContent = `${list.length.toLocaleString()} of ${state.companies.length.toLocaleString()} companies`;
+  $$('#companyTable th[data-sort]').forEach(th => {
+    th.classList.toggle('sorted', th.dataset.sort === state.sort.key);
+    th.classList.toggle('asc', th.dataset.sort === state.sort.key && state.sort.dir === 1);
+  });
+  $('#companyTable tbody').innerHTML = shown.map(c => {
+    const tags = [...new Set(c.contacts.map(x => x.role_tag).filter(t => KEY_TAGS.has(t)))];
+    const emails = c.contacts.filter(x => x.email).length;
+    const emp = employeesOf(c);
+    const sub = c.short_description || c._domain || '';
+    return `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
+      <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
+      <td><div class="co">${logo(c)}<div><div class="co-name">${esc(c.name)}</div><div class="co-sub" title="${esc(sub)}">${esc(sub)}</div></div></div></td>
+      <td>${roleChip(c.role)}</td>
+      <td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
+      <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
+      <td class="num">${money(c, c.revenue)}</td>
+      <td>${c.contacts.length ? `${c.contacts.length}${emails ? ` <span class="muted small">· ${emails} ✉</span>` : ''} ${tags.map(t => `<span class="tag k">${esc(tagShort(t))}</span>`).join('')}` : '<span class="muted">–</span>'}</td>
+      <td class="wrap">${projectChips(c)}</td>
+      <td>${c.enrichment ? `<span class="chip purple" title="${esc(c.enrichment.model)}">✦ ${ago(c.enrichment.at)}</span>` : state.queue?.pending?.includes(c.id) ? '<span class="chip amber">queued</span>' : '<span class="muted small">—</span>'}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="10"><div class="empty">${state.companies.length ? 'No companies match these filters.' : 'No companies yet. Click <b>Import Excel / CSV</b> to add your lists.'}</div></td></tr>`;
+  $('#moreRows').innerHTML = list.length > shown.length ? `<button class="btn" id="showMore">Show more (${(list.length - shown.length).toLocaleString()} left)</button>` : '';
+  $('#checkAllCompanies').checked = shown.length > 0 && shown.every(c => state.picked.has(c.id));
+  renderBulkBar();
+  renderFilterOptions();
+}
+
+function renderFilterOptions() {
   const fill = (sel, values, all) => {
     const cur = $(sel).value;
-    $(sel).innerHTML = `<option value="">${all}</option>` + values.map(v => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const html = `<option value="">${all}</option>` + values.map(v => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    if ($(sel)._html !== html) { $(sel).innerHTML = html; $(sel)._html = html; }
   };
   fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'All roles');
   fill('#filterProject', [...new Set(state.companies.flatMap(c => c.projects.map(p => p.project)).filter(Boolean))].sort(), 'All projects');
-  $('#companyList').innerHTML = state.companies.map(c => `<option value="${esc(c.name)}">`).join('');
+  fill('#filterCountry', [...new Set(state.companies.map(c => c.country).filter(Boolean))].sort(), 'All countries');
+  const dl = state.companies.map(c => `<option value="${esc(c.name)}">`).join('');
+  if ($('#companyList')._html !== dl) { $('#companyList').innerHTML = dl; $('#companyList')._html = dl; }
 }
 
-$('#search').addEventListener('input', renderCompanies);
-$('#filterRole').addEventListener('change', renderCompanies);
-$('#filterProject').addEventListener('change', renderCompanies);
-$('#companyTable').addEventListener('click', e => {
-  const edit = e.target.dataset.edit, m = e.target.dataset.match;
-  if (edit) openEdit(edit);
-  if (m) { setDeal(m); showTab('match'); }
+function renderBulkBar() {
+  $('#bulkBar').hidden = !state.picked.size;
+  $('#bulkCount').textContent = `${state.picked.size} selected`;
+}
+
+let searchTimer;
+$('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.limit = 200; renderCompanies(); }, 150); });
+['#filterRole', '#filterProject', '#filterCountry', '#filterEnriched', '#filterEmail'].forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
+$('#companyTable thead').addEventListener('click', e => {
+  const k = e.target.closest('th')?.dataset.sort;
+  if (!k) return;
+  state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (['employees', 'revenue', 'people', 'enriched'].includes(k) ? -1 : 1) };
+  renderCompanies();
+});
+$('#companyTable tbody').addEventListener('click', e => {
+  if (e.target.dataset.pick) {
+    e.target.checked ? state.picked.add(e.target.dataset.pick) : state.picked.delete(e.target.dataset.pick);
+    e.target.closest('tr').classList.toggle('sel', e.target.checked);
+    return renderBulkBar();
+  }
+  const tr = e.target.closest('tr[data-id]');
+  if (tr) openDrawer(tr.dataset.id);
+});
+$('#checkAllCompanies').addEventListener('change', e => {
+  filteredCompanies().slice(0, state.limit).forEach(c => (e.target.checked ? state.picked.add(c.id) : state.picked.delete(c.id)));
+  renderCompanies();
+});
+$('#moreRows').addEventListener('click', e => { if (e.target.id === 'showMore') { state.limit += 200; renderCompanies(); } });
+$('#bulkClear').addEventListener('click', () => { state.picked.clear(); renderCompanies(); });
+$('#bulkExport').addEventListener('click', () => downloadSheet([...state.picked].map(byId).filter(Boolean).map(flatten), 'companies-selection.xlsx'));
+$('#bulkDelete').addEventListener('click', async () => {
+  if (!confirm(`Delete ${state.picked.size} companies${Store.mode === 'cloud' ? ' for the whole team' : ''}?`)) return;
+  await removeCompanies([...state.picked]);
+  renderCompanies();
+});
+$('#bulkEnrich').addEventListener('click', () => startResearch([...state.picked]));
+
+// ---------- Research via Claude Code (subscription) ----------
+// Export: a small JSON file with what Claude needs to identify each company.
+// Import: the file Claude writes back (see CLAUDE.md for the format).
+function downloadJson(data, filename) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+  a.download = filename;
+  a.click();
+}
+$('#bulkResearchExport').addEventListener('click', () => {
+  const list = [...state.picked].map(byId).filter(Boolean);
+  const companies = list.map(c => ({
+    id: c.id, name: c.name, website: c.website || '', country: c.country || '', sector: c.sector || '',
+    linkedin_url: c.linkedin_url || '', description: String(c.description || '').slice(0, 500),
+    known_people: c.contacts.map(x => [x.name, x.title].filter(Boolean).join(' – ')).filter(Boolean).slice(0, 6),
+    researched_before: c.enrichment?.at?.slice(0, 10) || '',
+  }));
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  downloadJson({ type: 'mna-crm-research-request', version: 1, created: new Date().toISOString(), companies }, `research-request-${stamp}.json`);
+  toast(`Exported ${companies.length} companies. Give this file to Claude Code and ask it to research them.`, 7000);
 });
 
-$('#findDuplicates').addEventListener('click', () => {
+$('#importResearch').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const d = JSON.parse(await f.text());
+    const items = Array.isArray(d) ? d : d.companies;
+    if (!Array.isArray(items) || !items.some(x => x.profile)) throw new Error('This is not a research results file.');
+    const idx = Engine.buildIndex(state.companies);
+    let updated = 0, added = 0, skipped = 0;
+    for (const it of items) {
+      if (!it.profile || !it.name) { skipped++; continue; }
+      let c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name, website: it.website || it.profile.website }, idx).exact[0];
+      if (!c) { c = newCompany(it.name); state.companies.push(c); Engine.indexAdd(idx, c); added++; } else updated++;
+      Enricher.apply(c, it.profile, { at: it.researched_at || d.created || new Date().toISOString(), model: d.model || 'Claude Code (subscription)', usd: 0, searches: it.searches || 0 });
+      migrate(c);
+      touch(c);
+    }
+    await flush();
+    renderCompanies();
+    if (state.drawer) renderDrawer();
+    toast(`Research imported: ${updated} updated${added ? `, ${added} new` : ''}${skipped ? `, ${skipped} skipped` : ''}.`, 7000);
+  } catch (err) { toast('Could not import research: ' + err.message, 7000); }
+});
+
+$('#findDuplicates').addEventListener('click', async () => {
+  const idx = Engine.buildIndex(state.companies);
   const groups = [], seen = new Set();
   for (const c of state.companies) {
     if (seen.has(c.id)) continue;
-    const dups = Engine.findDuplicates(c, state.companies).exact.filter(d => !seen.has(d.id));
+    const dups = Engine.findDuplicates(c, idx).exact.filter(d => !seen.has(d.id));
     if (dups.length) { groups.push([c, ...dups]); [c, ...dups].forEach(x => seen.add(x.id)); }
   }
   if (!groups.length) return toast('No duplicates found.');
   const preview = groups.slice(0, 15).map(g => '• ' + g.map(c => c.name).join('  =  ')).join('\n');
   if (!confirm(`Found ${groups.length} duplicate group(s):\n\n${preview}${groups.length > 15 ? '\n…' : ''}\n\nMerge them? Contacts and project history are combined.`)) return;
-  const remove = new Set();
-  for (const [keep, ...rest] of groups) rest.forEach(r => { Engine.mergeCompanies(keep, r); remove.add(r.id); });
-  state.companies = state.companies.filter(c => !remove.has(c.id));
-  save.companies();
+  const remove = [];
+  for (const [keep, ...rest] of groups) { rest.forEach(r => { Engine.mergeCompanies(keep, r); remove.push(r.id); }); touch(keep); }
+  await removeCompanies(remove);
   renderCompanies();
-  toast(`Merged ${remove.size} duplicate(s).`);
+  toast(`Merged ${remove.length} duplicate(s).`);
 });
 
 $('#downloadTemplate').addEventListener('click', () => {
-  const headers = ['Company', 'Website', 'Role', 'Sector', 'Sub-sector', 'Country', 'Revenue (EUR m)', 'EBITDA (EUR m)', 'Employees', 'Ownership', 'Description', 'Keywords',
-    'Looking for sectors', 'Looking for countries', 'Min revenue', 'Max revenue', 'Contact name', 'Function', 'E-mail', 'Contact name 2', 'Function 2', 'E-mail 2', 'Status', 'Date of last contact', 'Log'];
+  const headers = ['Company', 'Website', 'Role', 'Sector', 'Sub-sector', 'Country', 'City', 'Revenue (EUR m)', 'EBITDA (EUR m)', 'Employees', 'Founded', 'Ownership', 'Short description', 'Description', 'Keywords',
+    'Looking for sectors', 'Looking for countries', 'Min revenue', 'Max revenue', 'Contact name', 'Function', 'E-mail', 'LinkedIn', 'Contact name 2', 'Function 2', 'E-mail 2', 'LinkedIn 2', 'Status', 'Date of last contact', 'Log'];
   const ex = [
-    ['Example Packaging BV', 'example-packaging.nl', 'Target', 'Packaging', 'Flexible packaging', 'Netherlands', 25, 4, 120, 'Founder', 'Producer of sustainable flexible packaging for food brands', 'packaging; sustainable; food', '', '', '', '', 'Jan de Vries', 'CEO', 'jan@example.com'],
-    ['Example Industrial Group', 'example-industrial.de', 'Buyer', 'Packaging', '', 'Germany', 400, 50, 2000, 'Private', 'Industrial packaging group pursuing a buy-and-build strategy', '', 'Packaging; Labels', 'Netherlands; Belgium; Germany', 10, 100, 'Anna Schmidt', 'Head of M&A', 'anna@example.com', 'Max Müller', 'CFO', 'max@example.com', 'Teaser sent', '2026-10-01'],
+    ['Example Packaging BV', 'example-packaging.nl', 'Target', 'Packaging', 'Flexible packaging', 'Netherlands', 'Utrecht', 25, 4, 120, 2004, 'Founder', 'Sustainable flexible packaging for food brands', 'Producer of sustainable flexible packaging and pouches for food brands in the Benelux.', 'packaging; sustainable; food', '', '', '', '', 'Jan de Vries', 'CEO', 'jan@example.com'],
+    ['Example Industrial Group', 'example-industrial.de', 'Buyer', 'Packaging', '', 'Germany', 'Hamburg', 400, 50, 2000, 1965, 'Private', '', 'Industrial packaging group pursuing a buy-and-build strategy', '', 'Packaging; Labels', 'Netherlands; Belgium; Germany', 10, 100, 'Anna Schmidt', 'Head of M&A', 'anna@example.com', '', 'Max Müller', 'CFO', 'max@example.com', '', 'Teaser sent', '2026-10-01'],
   ];
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([headers, ...ex]), 'Companies');
   XLSX.writeFile(wb, 'crm-template.xlsx');
 });
+
+// ---------- Company profile (drawer) ----------
+function openDrawer(id, tab = 'overview') {
+  state.drawer = { id, tab };
+  $('#drawer').hidden = false;
+  $('#drawerBackdrop').hidden = false;
+  renderDrawer();
+}
+function closeDrawer() {
+  state.drawer = null;
+  $('#drawer').hidden = true;
+  $('#drawerBackdrop').hidden = true;
+}
+$('#drawerBackdrop').addEventListener('click', closeDrawer);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.drawer && !document.querySelector('dialog[open]')) closeDrawer(); });
+
+function renderDrawer() {
+  if (!state.drawer) return;
+  const c = byId(state.drawer.id);
+  if (!c) return closeDrawer();
+  const tab = state.drawer.tab;
+  const e = c.enrichment;
+  const researching = state.queue?.running?.has(c.id);
+  const fact = (k, v) => v != null && v !== '' ? `<div class="fact"><div class="k">${k}</div><div class="v">${v}</div></div>` : '';
+  const tabs = [['overview', 'Overview'], ['people', `People (${c.contacts.length})`], ['acquisitions', `Acquisitions (${(c.acquisitions || []).length})`], ['projects', `Projects (${c.projects.length})`], ['sources', 'Sources']];
+
+  let body = '';
+  if (tab === 'overview') {
+    body = `${!e ? `<div class="callout"><span>✦</span><div><b>Not researched yet.</b> <span class="muted">Claude can find the LinkedIn page, key people, acquisitions and a description. Export it, ask Claude Code to research the file, then use <b>Import research</b>.</span></div><span class="spacer"></span><button class="btn primary" data-act="export">Export for research</button></div>` : ''}
+      ${c.short_description ? `<p class="lead">${esc(c.short_description)}</p>` : ''}
+      ${(e?.long_description || c.description) ? `<p class="prose">${esc(e?.long_description || c.description)}</p>` : '<p class="muted">No description yet.</p>'}
+      ${e?.long_description && c.description && c.description !== e.long_description ? `<details class="small" style="margin-top:8px"><summary>Description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
+      <div class="facts">
+        ${fact('Role', c.role && roleChip(c.role))}
+        ${fact('Sector', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
+        ${fact('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', ')))}
+        ${fact('Founded', esc(c.founded))}
+        ${fact('Ownership', esc(c.ownership))}
+        ${fact('Employees', c.employees != null ? Engine.fmt(c.employees) : '')}
+        ${fact('On LinkedIn', c.linkedin_employees_text ? esc(c.linkedin_employees_text) : c.linkedin_employees != null ? Engine.fmt(c.linkedin_employees) : '')}
+        ${fact('Revenue', money(c, c.revenue))}
+        ${fact('EBITDA', money(c, c.ebitda))}
+        ${fact('Acquisitive', e?.is_acquisitive && e.is_acquisitive !== 'unknown' ? esc(e.is_acquisitive) : '')}
+        ${fact('Ticker', esc(c.ticker))}
+        ${fact('CRM status', esc(c.status))}
+      </div>
+      ${c.target_sectors || c.target_countries || c.min_revenue != null || c.max_revenue != null ? `<h3>Acquisition criteria</h3><div class="facts">
+        ${fact('Sectors', esc(c.target_sectors))}${fact('Countries', esc(c.target_countries))}
+        ${fact('Revenue range', c.min_revenue != null || c.max_revenue != null ? `€${c.min_revenue ?? 0}–${c.max_revenue ?? '∞'}m` : '')}</div>` : ''}
+      ${c.portfolio ? `<h3>Portfolio</h3><p class="prose">${esc(c.portfolio)}</p>` : ''}
+      ${c.notes ? `<h3>Notes</h3><p class="prose">${esc(c.notes)}</p>` : ''}
+      ${e?.notes ? `<h3>Research notes</h3><p class="prose muted">${esc(e.notes)}</p>` : ''}`;
+  } else if (tab === 'people') {
+    const order = t => ['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strategy', 'Founder', 'COO', 'CTO', 'Chairman', 'Board'].indexOf(t) + 1 || 99;
+    const people = [...c.contacts].sort((a, b) => order(a.role_tag) - order(b.role_tag));
+    body = people.length ? `<div class="people">${people.map(p => `<div class="person">
+        <div class="avatar">${esc(initials(p.name || p.email))}</div>
+        <div style="min-width:0">
+          <div class="nm">${esc(p.name || p.email)} ${p.role_tag ? `<span class="tag k">${esc(tagShort(p.role_tag))}</span>` : ''}</div>
+          <div class="ti">${esc(p.title || '')}</div>
+          <div class="ln">
+            ${p.email ? `<a href="mailto:${esc(p.email)}">✉ ${esc(p.email)}</a>` : '<span class="muted">no email</span>'}
+            ${p.phone ? `<span>☎ ${esc(p.phone)}</span>` : ''}
+            ${p.linkedin ? `<a href="${esc(p.linkedin)}" target="_blank" rel="noopener">in LinkedIn ↗</a>` : ''}
+          </div>
+          <div class="muted small" style="margin-top:4px">${p.source === 'Claude' ? `Found by Claude${p.source_url ? ` · <a href="${esc(p.source_url)}" target="_blank" rel="noopener">source</a>` : ''}` : 'From your lists'}${p.verified_at ? ` · checked ${ago(p.verified_at)}` : ''}</div>
+        </div></div>`).join('')}</div>` : `<div class="empty">No people yet.${c.enrichment ? '' : ' Research with Claude to find the CEO, CFO and Corp Dev / M&A contacts.'}</div>`;
+    body += `<p class="muted small" style="margin-top:12px">Claude doesn't look up email addresses. Add them via <b>Edit</b> or by importing a list.</p>`;
+  } else if (tab === 'acquisitions') {
+    const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.year).localeCompare(String(a.year)));
+    body = acq.length ? `<div class="timeline">${acq.map(a => `<div class="tl-item"><div class="tl-year">${esc(a.year || 'Year unknown')}</div>
+        <div><b>${esc(a.target)}</b>${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div>
+        <div class="muted">${esc(a.description || '')}</div></div>`).join('')}</div>` : `<div class="empty">No acquisitions recorded.${c.enrichment ? ' Claude found none.' : ''}</div>`;
+  } else if (tab === 'projects') {
+    body = c.projects.map(p => `<div class="proj">
+      <b>${esc(p.project || 'Project')}</b> ${p.status ? `<span class="chip blue">${esc(p.status)}</span>` : ''}
+      <span class="muted small">${esc([p.last_contact && 'Last contact ' + p.last_contact, p.responsible && 'Resp. ' + p.responsible, p.tier && 'Tier ' + p.tier].filter(Boolean).join(' · '))}</span>
+      ${p.log ? `<div class="small">${esc(p.log)}</div>` : ''}
+      ${p.remarks ? `<div class="small muted">${esc(p.remarks)}</div>` : ''}
+      ${Object.keys(p.extra || {}).length ? `<details class="small"><summary>More info</summary>${Object.entries(p.extra).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join('')}</details>` : ''}
+      <div class="muted small">${esc(p.source || '')}</div></div>`).join('') || '<div class="empty">Not part of any project yet.</div>';
+  } else if (tab === 'sources') {
+    body = `<h3>Imported from</h3>${c.sources.length ? c.sources.map(s => `<div class="small">${esc(s)}</div>`).join('') : '<div class="muted small">Added by hand.</div>'}
+      <h3>Claude research</h3>${e ? `<div class="small">${new Date(e.at).toLocaleString()} · ${esc(e.model)} · ${e.searches} searches · ≈ $${Number(e.usd || 0).toFixed(2)}</div>
+        <ul class="small">${(e.sources || []).map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join('')}</ul>` : '<div class="muted small">Not researched yet.</div>'}`;
+  }
+
+  $('#drawer').innerHTML = `<div class="drawer-head">
+      <div class="drawer-title">${logo(c, true)}
+        <div style="min-width:0"><h2>${esc(c.name)}</h2>
+          <div class="drawer-links">
+            ${c.website ? `<a href="${esc(Engine.cleanUrl(c.website))}" target="_blank" rel="noopener">🌐 ${esc(c._domain || c.website)}</a>` : ''}
+            ${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener">in LinkedIn ↗</a>` : ''}
+            ${roleChip(c.role)}
+          </div></div>
+        <div class="drawer-actions">
+          <button class="btn ${e ? '' : 'primary'}" data-act="export" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
+          <button class="btn" data-act="research" ${researching ? 'disabled' : ''} title="Research directly via the Anthropic API (paid per company)">${researching ? 'Researching…' : e ? '↻ Research via API' : 'Research via API'}</button>
+          <button class="btn" data-act="edit">Edit</button>
+          <button class="btn" data-act="match">Find matches</button>
+          <button class="btn ghost" data-act="close" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="drawer-tabs">${tabs.map(([k, l]) => `<button data-dtab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="drawer-body">${body}</div>`;
+}
+$('#drawer').addEventListener('click', e => {
+  const t = e.target.closest('[data-dtab],[data-act]');
+  if (!t || !state.drawer) return;
+  const id = state.drawer.id;
+  if (t.dataset.dtab) { state.drawer.tab = t.dataset.dtab; return renderDrawer(); }
+  const act = t.dataset.act;
+  if (act === 'close') closeDrawer();
+  if (act === 'edit') openEdit(id);
+  if (act === 'research') startResearch([id], { force: true });
+  if (act === 'export') {
+    const keep = new Set(state.picked);
+    state.picked = new Set([id]);
+    $('#bulkResearchExport').click();
+    state.picked = keep;
+  }
+  if (act === 'match') { closeDrawer(); setDeal(id); showTab('match'); }
+});
+
+// ---------- Claude research queue ----------
+function estimatePerCompany() {
+  const s = state.settings.spend;
+  if (s.count >= 3) return s.usd / s.count;
+  return { 'claude-opus-5-5': 0.25, 'claude-sonnet-5-5': 0.15, 'claude-haiku-5-5': 0.09 }[state.settings.enrichModel] || 0.25;
+}
+
+function startResearch(ids, { force = false } = {}) {
+  if (!state.settings.anthropicKey) { toast('Add your Anthropic API key in Settings → Claude research first.', 5000); return showTab('settings'); }
+  const skipDays = Number(state.settings.enrichSkipDays) || 0;
+  const busy = new Set([...(state.queue?.pending || []), ...(state.queue?.running || [])]);
+  let todo = ids.filter(id => !busy.has(id));
+  const recent = todo.filter(id => { const e = byId(id)?.enrichment; return e && daysAgo(e.at) < skipDays; });
+  if (!force && recent.length) todo = todo.filter(id => !recent.includes(id));
+  if (!todo.length) return toast(recent.length ? `All ${recent.length} were researched in the last ${skipDays} days.` : 'Already in the queue.');
+  if (todo.length > 1 || !force) {
+    const est = todo.length * estimatePerCompany();
+    if (!confirm(`Research ${todo.length} compan${todo.length === 1 ? 'y' : 'ies'} with ${Enricher.MODELS[state.settings.enrichModel]?.label || state.settings.enrichModel}?\n\nEstimated cost: about $${est.toFixed(2)} (≈ $${estimatePerCompany().toFixed(2)} each)${recent.length ? `\nSkipping ${recent.length} researched in the last ${skipDays} days.` : ''}`)) return;
+  }
+  if (!state.queue) state.queue = { pending: [], running: new Set(), done: 0, failed: [], usd: 0, total: 0, paused: false, controllers: new Map() };
+  state.queue.pending.push(...todo);
+  state.queue.total += todo.length;
+  renderQueue();
+  renderCompanies();
+  if (state.drawer) renderDrawer();
+  pumpQueue();
+}
+
+function pumpQueue() {
+  const q = state.queue;
+  if (!q) return;
+  const max = Math.max(1, Math.min(5, Number(state.settings.enrichParallel) || 2));
+  while (!q.paused && q.pending.length && q.running.size < max) runOne(q.pending.shift());
+  if (!q.pending.length && !q.running.size) finishQueue();
+}
+
+async function runOne(id) {
+  const q = state.queue, c = byId(id);
+  if (!c) return pumpQueue();
+  q.running.add(id);
+  const ctrl = new AbortController();
+  q.controllers.set(id, ctrl);
+  renderQueue();
+  if (state.drawer?.id === id) renderDrawer();
+  try {
+    const r = await Enricher.research(c, { apiKey: state.settings.anthropicKey, model: state.settings.enrichModel, signal: ctrl.signal });
+    Enricher.apply(c, r.profile, { at: new Date().toISOString(), model: r.model, usd: r.usd, searches: r.searches });
+    migrate(c);
+    touch(c);
+    q.done++;
+    q.usd += r.usd;
+    state.settings.spend.usd += r.usd;
+    state.settings.spend.count++;
+    saveSettingsLocal();
+  } catch (err) {
+    if (ctrl.signal.aborted) q.pending.unshift(id);
+    else { q.failed.push({ id, name: c.name, error: err.message }); console.error(c.name, err); }
+    if (/401|authentication|invalid x-api-key/i.test(err.message)) { q.paused = true; toast('Your Anthropic API key was rejected. Check it in Settings.', 7000); }
+  } finally {
+    q.running.delete(id);
+    q.controllers.delete(id);
+    renderQueue();
+    scheduleListRender();
+    if (state.drawer?.id === id) renderDrawer();
+    pumpQueue();
+  }
+}
+
+let listRenderTimer;
+function scheduleListRender() { clearTimeout(listRenderTimer); listRenderTimer = setTimeout(renderCompanies, 300); }
+
+function renderQueue() {
+  const q = state.queue;
+  if (!q) { $('#queue').hidden = true; return; }
+  const finished = q.done + q.failed.length;
+  const names = [...q.running].map(id => byId(id)?.name).filter(Boolean);
+  $('#queue').hidden = false;
+  $('#queue').innerHTML = `<h4>✦ Researching with Claude</h4>
+    <div class="small">${finished} of ${q.total} done${q.failed.length ? ` · <span class="err">${q.failed.length} failed</span>` : ''} · ≈ $${q.usd.toFixed(2)}</div>
+    <div class="bar"><div style="width:${q.total ? (finished / q.total) * 100 : 0}%"></div></div>
+    <div class="cur">${q.paused ? 'Paused' : names.length ? 'Now: ' + esc(names.join(', ')) : 'Starting…'}</div>
+    <div class="toolbar" style="margin:10px 0 0">
+      <button class="btn sm" data-q="${q.paused ? 'resume' : 'pause'}">${q.paused ? 'Resume' : 'Pause'}</button>
+      <button class="btn sm danger" data-q="stop">Stop</button>
+      ${q.failed.length ? '<button class="btn sm" data-q="errors">Show errors</button>' : ''}
+    </div>`;
+}
+$('#queue').addEventListener('click', e => {
+  const a = e.target.dataset.q, q = state.queue;
+  if (!a || !q) return;
+  if (a === 'pause') { q.paused = true; renderQueue(); }
+  if (a === 'resume') { q.paused = false; renderQueue(); pumpQueue(); }
+  if (a === 'stop') { q.pending = []; q.controllers.forEach(c => c.abort()); q.paused = false; setTimeout(finishQueue, 50); }
+  if (a === 'errors') alert(q.failed.map(f => `${f.name}: ${f.error}`).join('\n\n'));
+});
+function finishQueue() {
+  const q = state.queue;
+  if (!q || q.running.size) return;
+  const msg = `Research finished: ${q.done} done${q.failed.length ? `, ${q.failed.length} failed` : ''}. Cost ≈ $${q.usd.toFixed(2)}.`;
+  if (q.failed.length) alert(msg + '\n\n' + q.failed.map(f => `${f.name}: ${f.error}`).join('\n'));
+  else toast(msg, 6000);
+  state.queue = null;
+  renderQueue();
+  renderCompanies();
+  renderSpend();
+}
 
 // ---------- Import wizard ----------
 // imp = { files: [{ name, project, sheets: [...] }], fi, si, stage: 'sheets' | 'sheet' }
@@ -207,15 +578,15 @@ function readSheet(ws, name) {
   return { name, rows, r0: range.s.r };
 }
 
-function prepSheet(file, sh, resetMapping) {
+function prepSheet(file, sh, resetMapping, idx = Engine.buildIndex(state.companies)) {
   sh.headers = (sh.rows[sh.headerRow] || []).map(norm);
   if (resetMapping || !sh.targets) sh.targets = Engine.mapHeaders(sh.headers, state.mappingMemory);
   const source = `${file.name} › ${sh.name}`;
   const firstByName = new Map();
   sh.parsed = sh.rows.slice(sh.headerRow + 1).map((row, i) => {
-    const p = Engine.parseRow(row, sh.headers, sh.targets, { unit: sh.unit, role: sh.role, project: sh.project || file.project, source });
+    const p = Engine.parseRow(row, sh.headers, sh.targets, { unit: sh.unit, currency: sh.currency, role: sh.role, project: sh.project || file.project, source });
     if (!p.company.name) return null;
-    const dup = Engine.findDuplicates(p.company, state.companies);
+    const dup = Engine.findDuplicates(p.company, idx);
     const n = Engine.normName(p.company.name);
     const sameRow = firstByName.get(n);
     if (!sameRow) firstByName.set(n, sh.r0 + sh.headerRow + i + 2);
@@ -230,6 +601,7 @@ $('#upload').addEventListener('change', async e => {
   e.target.value = '';
   if (!files.length) return;
   imp = { files: [], fi: 0, si: 0, stage: 'sheets', search: '' };
+  const idx = Engine.buildIndex(state.companies);
   for (const f of files) {
     try {
       const wb = XLSX.read(await f.arrayBuffer(), { type: 'array', cellDates: false });
@@ -239,9 +611,10 @@ $('#upload').addEventListener('change', async e => {
         if (!sh) continue;
         sh.headerRow = Engine.detectHeaderRow(sh.rows);
         sh.unit = Engine.detectUnit(sh.rows, sh.headerRow);
+        sh.currency = Engine.detectCurrency(sh.rows, sh.headerRow);
         sh.role = Engine.guessRoleFromSheet(n);
         sh.project = state.mappingMemory['sheet:' + Engine.headerKey(n)] || '';
-        prepSheet(file, sh, true);
+        prepSheet(file, sh, true, idx);
         sh.include = sh.parsed.length > 0 && !Engine.SKIP_SHEETS.test(n);
         file.sheets.push(sh);
       }
@@ -259,19 +632,21 @@ $('#upload').addEventListener('change', async e => {
 const curFile = () => imp.files[imp.fi];
 const includedSheets = () => curFile().sheets.filter(s => s.include);
 const curSheet = () => includedSheets()[imp.si];
+const ROLE_OPTIONS = ['', 'Buyer', 'Investor', 'Target', 'Advisor'];
+const roleSelect = (attr, sel) => `<select ${attr}>${ROLE_OPTIONS.map(r => `<option ${r === sel ? 'selected' : ''} value="${r}">${r || '—'}</option>`).join('')}</select>`;
 
 function renderImport() {
   const file = curFile();
   const head = `<div class="muted small">File ${imp.fi + 1} of ${imp.files.length}</div>`;
   if (imp.stage === 'sheets') {
     $('#importBody').innerHTML = `${head}<h2>${esc(file.name)}</h2>
-      <label style="max-width:360px">Project name <input id="impProject" value="${esc(file.project)}"></label>
-      <p class="muted small">Pick the sheets to import. Each sheet can have its own layout; you check the columns on the next screen.</p>
+      <label style="max-width:360px">Project name <input id="impProject" value="${esc(file.project)}" placeholder="None (plain company list)"></label>
+      <p class="muted small">Pick the sheets to import. Each sheet can have its own layout; you check the columns on the next screen. Capital IQ exports are recognised automatically.</p>
       <table class="compact"><thead><tr><th></th><th>Sheet</th><th class="num">Companies</th><th>Default role</th></tr></thead><tbody>
       ${file.sheets.map((s, k) => `<tr>
         <td><input type="checkbox" data-inc="${k}" ${s.include ? 'checked' : ''}></td>
         <td>${esc(s.name)}</td><td class="num">${s.parsed.length}</td>
-        <td><select data-role="${k}">${['', 'Buyer', 'Investor', 'Target', 'Advisor'].map(r => `<option ${r === s.role ? 'selected' : ''} value="${r}">${r || '—'}</option>`).join('')}</select></td>
+        <td>${roleSelect(`data-role="${k}"`, s.role)}</td>
       </tr>`).join('')}</tbody></table>
       <div class="toolbar" style="margin-top:16px"><span class="spacer"></span>
         <button class="btn" data-act="cancel">Cancel</button>
@@ -309,14 +684,16 @@ function renderImport() {
     const cls = p.exact || p.sameRow ? 'dup-exact' : p.possible.length ? 'dup-possible' : '';
     return opts.length > 1 || cls ? `<select class="${cls}" data-choice="${p.i}">${opts.join('')}</select>` : '<span class="muted small">New</span>';
   };
+  const CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'SEK'];
 
   $('#importBody').innerHTML = `${head}
     <h2>${esc(file.name)} › ${esc(sh.name)} <span class="muted small">(sheet ${imp.si + 1} of ${sheets.length})</span></h2>
     <div class="toolbar">
-      <label class="row">Header row <input type="number" id="impHeader" min="1" value="${sh.r0 + sh.headerRow + 1}" style="width:70px"></label>
-      <label class="row">Amounts in <select id="impUnit"><option value="m" ${sh.unit === 'm' ? 'selected' : ''}>EUR millions</option><option value="k" ${sh.unit === 'k' ? 'selected' : ''}>EUR thousands</option></select></label>
-      <label class="row">Default role <select id="impRole">${['', 'Buyer', 'Investor', 'Target', 'Advisor'].map(r => `<option ${r === sh.role ? 'selected' : ''} value="${r}">${r || '—'}</option>`).join('')}</select></label>
-      <label class="row">Project for this sheet <input id="impProject2" value="${esc(sh.project || file.project)}" style="width:160px"></label>
+      <label class="row-label">Header row <input type="number" id="impHeader" min="1" value="${sh.r0 + sh.headerRow + 1}" style="width:70px"></label>
+      <label class="row-label">Amounts in <select id="impUnit"><option value="m" ${sh.unit === 'm' ? 'selected' : ''}>millions</option><option value="k" ${sh.unit === 'k' ? 'selected' : ''}>thousands</option></select></label>
+      <label class="row-label">Currency <select id="impCurrency">${CURRENCIES.map(c => `<option ${c === sh.currency ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
+      <label class="row-label">Default role ${roleSelect('id="impRole"', sh.role)}</label>
+      <label class="row-label">Project for this sheet <input id="impProject2" value="${esc(sh.project || file.project)}" placeholder="none" style="width:160px"></label>
     </div>
     <details ${imp.showMap !== false ? 'open' : ''} id="impMapDetails"><summary><b>Columns</b> <span class="muted small">check what each column means; your choices are remembered for next time</span></summary>
       <div class="map-grid">${mapRows}</div>
@@ -329,11 +706,11 @@ function renderImport() {
       <button class="btn" data-act="selemail">Only rows with email</button>
     </div>
     <div class="table-wrap" style="max-height:40vh">
-      <table class="compact"><thead><tr><th></th><th>Row</th><th>Company</th><th>Role</th><th>Country</th><th class="num">Rev (m)</th><th>Contacts</th><th>Status</th><th>Duplicate?</th></tr></thead><tbody>
+      <table class="compact"><thead><tr><th></th><th>Row</th><th>Company</th><th>Role</th><th>Country</th><th class="num">Revenue</th><th>Contacts</th><th>Status</th><th>Duplicate?</th></tr></thead><tbody>
       ${visible.map(p => `<tr class="${sh.selected.has(p.i) ? '' : 'unsel'}">
         <td><input type="checkbox" data-row="${p.i}" ${sh.selected.has(p.i) ? 'checked' : ''}></td>
         <td class="muted">${p.excelRow}</td><td>${esc(p.company.name)}</td><td>${esc(p.company.role)}</td><td>${esc(p.company.country)}</td>
-        <td class="num">${Engine.fmt(p.company.revenue)}</td>
+        <td class="num">${money(p.company, p.company.revenue)}</td>
         <td class="small">${p.contacts.map(c => esc(c.name || c.email) + (c.email ? '' : ' <span class="muted">(no email)</span>')).join('<br>')}</td>
         <td class="small">${esc((p.project.status || '').slice(0, 30))}</td>
         <td>${dupCell(p)}</td></tr>`).join('') || '<tr><td colspan="9" class="muted">No rows. Check the header row and that a column is mapped to "Company name".</td></tr>'}
@@ -353,26 +730,33 @@ function nextAfterSheet() {
   toast(`Import finished: ${t.added} new companies, ${t.merged} merged into existing ones.`, 7000);
   imp = null;
   renderCompanies();
-  runMatch();
 }
 
 function importSheet() {
   const file = curFile(), sh = curSheet();
+  const idx = Engine.buildIndex(state.companies);
   let added = 0, merged = 0;
   for (const p of sh.parsed) {
     if (!sh.selected.has(p.i)) continue;
     const ch = sh.choices[p.i] || 'auto';
     let target = null;
-    if (ch === 'auto') target = Engine.findDuplicates(p.company, state.companies).exact[0] || null;
+    if (ch === 'auto') target = Engine.findDuplicates(p.company, idx).exact[0] || null;
     else if (ch !== 'new') target = byId(ch);
-    if (target) { Engine.mergeInto(target, p); merged++; }
-    else { const c = newCompany(p.company.name); Engine.mergeInto(c, p); state.companies.push(c); added++; }
+    if (target) { Engine.mergeInto(target, p); merged++; touch(target); }
+    else {
+      const c = newCompany(p.company.name);
+      Engine.mergeInto(c, p);
+      state.companies.push(c);
+      Engine.indexAdd(idx, c);
+      touch(c);
+      added++;
+    }
   }
   imp.totals = { added: (imp.totals?.added || 0) + added, merged: (imp.totals?.merged || 0) + merged };
-  save.companies();
+  flush();
   toast(`${sh.name}: ${added} new, ${merged} merged.`);
   // Later sheets should see the companies just imported as duplicates.
-  includedSheets().slice(imp.si + 1).forEach(s => prepSheet(file, s, false));
+  includedSheets().slice(imp.si + 1).forEach(s => prepSheet(file, s, false, idx));
   nextAfterSheet();
 }
 
@@ -383,9 +767,10 @@ $('#importBody').addEventListener('click', e => {
   if (act === 'cancel') { $('#importDialog').close(); imp = null; renderCompanies(); return; }
   if (act === 'skipfile') { imp.si = includedSheets().length; nextAfterSheet(); return; }
   if (act === 'tosheets') {
-    file.project = norm($('#impProject').value) || file.project;
+    file.project = norm($('#impProject').value);
     if (!includedSheets().length) return toast('Select at least one sheet.');
-    file.sheets.forEach(s => prepSheet(file, s, false));
+    const idx = Engine.buildIndex(state.companies);
+    file.sheets.forEach(s => prepSheet(file, s, false, idx));
     imp.stage = 'sheet'; imp.si = 0; return renderImport();
   }
   if (act === 'back') { if (imp.si > 0) imp.si--; else imp.stage = 'sheets'; return renderImport(); }
@@ -413,15 +798,16 @@ $('#importBody').addEventListener('change', e => {
   if (t.dataset.map) {
     const i = +t.dataset.map;
     sh.targets[i] = t.value;
-    if (sh.headers[i]) { state.mappingMemory[Engine.headerKey(sh.headers[i])] = t.value; save.mapping(); }
+    if (sh.headers[i]) { state.mappingMemory[Engine.headerKey(sh.headers[i])] = t.value; saveShared('mappingMemory', state.mappingMemory); }
   }
   if (t.id === 'impHeader') { sh.headerRow = Math.max(0, +t.value - 1 - sh.r0); prepSheet(file, sh, true); return renderImport(); }
   if (t.id === 'impUnit') sh.unit = t.value;
+  if (t.id === 'impCurrency') sh.currency = t.value;
   if (t.id === 'impRole') sh.role = t.value;
   if (t.id === 'impProject2') {
     sh.project = norm(t.value);
     state.mappingMemory['sheet:' + Engine.headerKey(sh.name)] = sh.project;
-    save.mapping();
+    saveShared('mappingMemory', state.mappingMemory);
   }
   prepSheet(file, sh, false);
   renderImport();
@@ -436,6 +822,7 @@ $('#importBody').addEventListener('input', e => {
 $('#importBody').addEventListener('toggle', e => { if (imp && e.target.id === 'impMapDetails') imp.showMap = e.target.open; }, true);
 
 // ---------- Edit dialog ----------
+const CONTACT_INPUTS = ['name', 'title', 'email', 'phone', 'linkedin'];
 function openEdit(id) {
   const c = id ? byId(id) : newCompany('');
   const dlg = $('#editDialog');
@@ -445,57 +832,47 @@ function openEdit(id) {
   const fieldHtml = f => {
     const v = c[f.key] ?? '';
     let input;
-    if (f.key === 'role') input = `<select name="${f.key}">${['', 'Target', 'Buyer', 'Investor', 'Advisor'].map(r => `<option ${r === v ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
+    if (f.key === 'role') input = `<select name="${f.key}">${ROLE_OPTIONS.map(r => `<option ${r === v ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
     else if (f.long) input = `<textarea name="${f.key}" rows="3">${esc(v)}</textarea>`;
     else input = `<input name="${f.key}" value="${esc(v)}" ${f.key === 'name' ? 'required' : ''}>`;
-    return `<label class="${f.long ? 'full' : ''}">${esc(f.label)}${f.money ? ' (EUR m)' : ''}${input}</label>`;
+    return `<label class="${f.long ? 'full' : ''}">${esc(f.label)}${input}</label>`;
   };
   const statusSel = `<label>CRM status<select name="status">${Engine.STATUSES.map(s => `<option ${s === c.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>`;
-  const projects = (c.projects || []).map(p => `<div class="proj">
-      <b>${esc(p.project || 'Project')}</b> ${p.status ? `<span class="chip">${esc(p.status)}</span>` : ''}
-      <span class="muted small">${esc([p.last_contact && 'Last contact ' + p.last_contact, p.responsible && 'Resp. ' + p.responsible, p.tier && 'Tier ' + p.tier].filter(Boolean).join(' · '))}</span>
-      ${p.log ? `<div class="small">${esc(p.log)}</div>` : ''}
-      ${p.remarks ? `<div class="small muted">${esc(p.remarks)}</div>` : ''}
-      ${Object.keys(p.extra || {}).length ? `<details class="small"><summary>More info</summary>${Object.entries(p.extra).map(([k, v]) => `<div><b>${esc(k)}:</b> ${esc(v)}</div>`).join('')}</details>` : ''}
-      <div class="muted small">${esc(p.source || '')}</div></div>`).join('') || '<div class="muted small">No project history yet.</div>';
-
   $('#editFields').innerHTML = `
     <div class="form-grid">${Engine.COMPANY_FIELDS.map(fieldHtml).join('')}${statusSel}</div>
     <h3>Contacts</h3><div id="editContacts"></div>
     <button type="button" class="btn" id="addContact">+ Add contact</button>
-    <h3>Projects</h3>${projects}
     ${id ? `<h3>Merge</h3><div class="toolbar">
       <input list="companyList" id="mergeWith" placeholder="Another company with the same identity…" style="flex:1">
       <button type="button" class="btn" id="mergeBtn">Merge into this company</button></div>
-      <div class="toolbar"><button type="button" class="btn danger" id="deleteCompany">Delete company</button>
-      <span class="muted small">Sources: ${esc(c.sources.join('; ')) || '—'}</span></div>` : ''}`;
+      <div class="toolbar"><button type="button" class="btn danger" id="deleteCompany">Delete company</button></div>` : ''}`;
   renderEditContacts();
   $('#addContact').addEventListener('click', () => { readEditContacts(); dlg._contacts.push({}); renderEditContacts(); });
-  $('#deleteCompany')?.addEventListener('click', () => {
+  $('#deleteCompany')?.addEventListener('click', async () => {
     if (!confirm(`Delete ${c.name}?`)) return;
-    state.companies = state.companies.filter(x => x.id !== id);
-    save.companies();
     dlg.close('cancel');
+    closeDrawer();
+    await removeCompanies([id]);
     renderCompanies();
   });
-  $('#mergeBtn')?.addEventListener('click', () => {
+  $('#mergeBtn')?.addEventListener('click', async () => {
     const name = $('#mergeWith').value.trim().toLowerCase();
     const other = state.companies.find(x => x.id !== id && x.name.toLowerCase() === name);
     if (!other) return toast('Pick an existing company from the list.');
     if (!confirm(`Merge "${other.name}" into "${c.name}"? "${other.name}" will be removed; its contacts and projects move here.`)) return;
     Engine.mergeCompanies(c, other);
-    state.companies = state.companies.filter(x => x.id !== other.id);
-    save.companies();
+    touch(c);
     dlg.close('cancel');
+    await removeCompanies([other.id]);
     renderCompanies();
-    openEdit(id);
+    renderDrawer();
   });
   dlg.showModal();
 }
 function renderEditContacts() {
   const list = $('#editDialog')._contacts;
   $('#editContacts').innerHTML = list.map((ct, i) => `<div class="contact-row">
-    ${['name', 'title', 'email', 'phone'].map(k => `<input data-ci="${i}" data-ck="${k}" placeholder="${k === 'title' ? 'function' : k}" value="${esc(ct[k] || '')}">`).join('')}
+    ${CONTACT_INPUTS.map(k => `<input data-ci="${i}" data-ck="${k}" placeholder="${k === 'title' ? 'function' : k}" value="${esc(ct[k] || '')}">`).join('')}
     <button type="button" class="link" data-rmc="${i}">remove</button></div>`).join('') || '<div class="muted small">No contacts.</div>';
   $$('[data-rmc]').forEach(b => b.addEventListener('click', () => { readEditContacts(); list.splice(+b.dataset.rmc, 1); renderEditContacts(); }));
 }
@@ -511,14 +888,15 @@ $('#editDialog').addEventListener('close', () => {
   const data = Object.fromEntries(new FormData($('#editForm')));
   for (const f of Engine.COMPANY_FIELDS) if (f.num) data[f.key] = Engine.parseNumber(data[f.key]);
   data.role = Engine.normaliseRole(data.role);
-  const contacts = dlg._contacts.filter(x => x.name || x.email).map(x => ({ ...x, email: (x.email || '').toLowerCase() }));
+  const contacts = dlg._contacts.filter(x => x.name || x.email).map(x => ({ ...x, email: (x.email || '').toLowerCase(), linkedin: x.linkedin ? Engine.cleanUrl(x.linkedin) : '' }));
   let c = dlg.dataset.id ? byId(dlg.dataset.id) : null;
   if (!c) { c = newCompany(data.name); state.companies.push(c); }
   Object.assign(c, data, { contacts });
   migrate(c);
-  save.companies();
+  touch(c);
   renderCompanies();
-  if (state.campaign.dealId) runMatch();
+  if (state.drawer?.id === c.id) renderDrawer();
+  else if (!dlg.dataset.id) openDrawer(c.id);
 });
 
 // ---------- Match engine ----------
@@ -531,17 +909,17 @@ $('#weights').addEventListener('input', e => {
   if (!k) return;
   state.weights[k] = Number(e.target.value);
   e.target.nextElementSibling.textContent = e.target.value;
-  save.weights();
+  saveShared('weights', state.weights);
   runMatch();
 });
-$('#resetWeights').addEventListener('click', () => { state.weights = { ...Engine.DEFAULT_WEIGHTS }; save.weights(); renderWeights(); runMatch(); });
+$('#resetWeights').addEventListener('click', () => { state.weights = { ...Engine.DEFAULT_WEIGHTS }; saveShared('weights', state.weights); renderWeights(); runMatch(); });
 
 function setDeal(id) {
   const deal = byId(id);
   if (!deal) return;
   state.campaign.dealId = id;
   $('#matchFor').value = deal.name;
-  $('#matchForInfo').innerHTML = [deal.role, deal.sector, deal.subsector, deal.country, deal.revenue != null ? `€${Engine.fmt(deal.revenue)}m revenue` : ''].filter(Boolean).map(esc).join(' · ');
+  $('#matchForInfo').innerHTML = [deal.role, deal.sector, deal.subsector, deal.country, deal.revenue != null ? `${money(deal, deal.revenue)} revenue` : ''].filter(Boolean).map(esc).join(' · ');
   // Default: a target looks for buyers/investors, a buyer looks for targets.
   state.roleFilter = new Set(deal.role === 'Target' ? ['Buyer', 'Investor', ''] : deal.role ? ['Target', ''] : []);
   state.selected.clear();
@@ -557,7 +935,7 @@ function renderRoleFilters() {
   const roles = [...new Set(state.companies.map(c => c.role || ''))];
   $('#roleFilters').innerHTML = roles.map(r => {
     const on = !state.roleFilter.size || state.roleFilter.has(r);
-    return `<span class="chip ${on ? '' : 'off'}" data-role="${esc(r)}">${esc(r || 'No role')}</span>`;
+    return `<span class="chip ${on ? 'blue' : 'off'}" data-role="${esc(r)}">${esc(r || 'No role')}</span>`;
   }).join('');
 }
 $('#roleFilters').addEventListener('click', e => {
@@ -576,7 +954,7 @@ function contactedFor(dealId) {
 function runMatch() {
   renderRoleFilters();
   const deal = byId(state.campaign.dealId);
-  if (!deal) { $('#matchTable tbody').innerHTML = '<tr><td colspan="9" class="muted">Choose a company on the left to find matches.</td></tr>'; syncCampaign(); return; }
+  if (!deal) { $('#matchTable tbody').innerHTML = '<tr><td colspan="9"><div class="empty">Choose a company on the left to find matches.</div></td></tr>'; syncCampaign(); return; }
   const onlyEmail = $('#onlyWithEmail').checked, hide = $('#hideContacted').checked;
   const min = Number($('#minScore').value) || 0;
   const done = contactedFor(deal.id);
@@ -590,17 +968,17 @@ function runMatch() {
     const pc = Engine.primaryContact(c);
     const n = c.contacts.filter(x => x.email).length;
     return `<tr>
-      <td><input type="checkbox" data-sel="${c.id}" ${state.selected.has(c.id) ? 'checked' : ''}></td>
+      <td class="cb"><input type="checkbox" data-sel="${c.id}" ${state.selected.has(c.id) ? 'checked' : ''}></td>
       <td><span class="score" style="background:${scoreColor(score)}">${score}</span></td>
-      <td><button class="link" data-edit="${c.id}">${esc(c.name)}</button>${done.has(c.id) ? ' <span class="chip">emailed</span>' : ''}</td>
-      <td>${esc(c.role)}</td><td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
-      <td class="num">${Engine.fmt(c.revenue)}</td><td>${esc(pc?.email || '')}${n > 1 ? ` <span class="muted">+${n - 1}</span>` : ''}</td>
+      <td><div class="co">${logo(c)}<button class="link co-name" data-open="${c.id}">${esc(c.name)}</button>${done.has(c.id) ? ' <span class="chip green">emailed</span>' : ''}</div></td>
+      <td>${roleChip(c.role)}</td><td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
+      <td class="num">${money(c, c.revenue)}</td><td>${esc(pc?.email || '')}${n > 1 ? ` <span class="muted">+${n - 1}</span>` : ''}</td>
       <td class="wrap">${reasons.map(r => `<span class="chip">${esc(r)}</span>`).join('')}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan="9" class="muted">No matches. Try lowering the minimum score or changing the role filter.</td></tr>';
+  }).join('') || '<tr><td colspan="9"><div class="empty">No matches. Try lowering the minimum score or changing the role filter.</div></td></tr>';
   syncCampaign();
 }
-const scoreColor = s => (s >= 70 ? '#1a7f37' : s >= 45 ? '#2f81f7' : s >= 25 ? '#9a6700' : '#8c959f');
+const scoreColor = s => (s >= 70 ? '#067647' : s >= 45 ? '#1d4ed8' : s >= 25 ? '#b54708' : '#98a2b3');
 
 $('#matchTable').addEventListener('change', e => {
   const id = e.target.dataset.sel;
@@ -608,7 +986,7 @@ $('#matchTable').addEventListener('change', e => {
   e.target.checked ? state.selected.add(id) : state.selected.delete(id);
   syncCampaign();
 });
-$('#matchTable').addEventListener('click', e => { if (e.target.dataset.edit) openEdit(e.target.dataset.edit); });
+$('#matchTable').addEventListener('click', e => { if (e.target.dataset.open) openDrawer(e.target.dataset.open); });
 $('#checkAll').addEventListener('change', e => { state.matches.forEach(m => (e.target.checked ? state.selected.add(m.company.id) : state.selected.delete(m.company.id))); runMatch(); });
 $('#selectTop').addEventListener('click', () => { state.matches.slice(0, 25).forEach(m => state.selected.add(m.company.id)); runMatch(); });
 $('#selectNone').addEventListener('click', () => { state.selected.clear(); runMatch(); });
@@ -635,7 +1013,7 @@ function sendsFor(c) {
   if (ch === 'primary') return withEmail.slice(0, 1).map(o => o.x);
   return c.contacts[+ch]?.email ? [c.contacts[+ch]] : withEmail.slice(0, 1).map(o => o.x);
 }
-const allSends = () => state.campaign.recipientIds.map(byId).flatMap(c => sendsFor(c).map(contact => ({ company: c, contact })));
+const allSends = () => state.campaign.recipientIds.map(byId).filter(Boolean).flatMap(c => sendsFor(c).map(contact => ({ company: c, contact })));
 
 function currentTemplate() {
   return state.templates.find(t => t.id === $('#templateSelect').value) || state.templates[0];
@@ -649,7 +1027,7 @@ function renderTemplates(selectId) {
 $('#templateSelect').addEventListener('change', () => renderTemplates($('#templateSelect').value));
 $('#saveTemplate').addEventListener('click', () => {
   Object.assign(currentTemplate(), { subject: $('#subject').value, body: $('#body').value });
-  save.templates();
+  saveShared('templates', state.templates);
   toast('Template saved.');
 });
 $('#saveTemplateAs').addEventListener('click', () => {
@@ -657,7 +1035,7 @@ $('#saveTemplateAs').addEventListener('click', () => {
   if (!name) return;
   const t = { id: uid(), name, subject: $('#subject').value, body: $('#body').value };
   state.templates.push(t);
-  save.templates();
+  saveShared('templates', state.templates);
   renderTemplates(t.id);
 });
 $('#deleteTemplate').addEventListener('click', () => {
@@ -665,7 +1043,7 @@ $('#deleteTemplate').addEventListener('click', () => {
   const t = currentTemplate();
   if (!confirm(`Delete template "${t.name}"?`)) return;
   state.templates = state.templates.filter(x => x !== t);
-  save.templates();
+  saveShared('templates', state.templates);
   renderTemplates(state.templates[0].id);
 });
 ['#subject', '#body'].forEach(s => $(s).addEventListener('input', renderPreview));
@@ -741,6 +1119,7 @@ $('#sendBtn').addEventListener('click', async () => {
   $('#sendBtn').disabled = true;
   state.sendStatus = {};
   const cc = $('#cc').value.split(/[;,]/).map(s => s.trim()).filter(Boolean);
+  const entries = [];
   let ok = 0, fail = 0;
   for (let i = 0; i < sends.length; i++) {
     const { company: c, contact } = sends[i];
@@ -755,23 +1134,24 @@ $('#sendBtn').addEventListener('click', async () => {
       if (mode === 'send') {
         if (!c.status || c.status === 'New') c.status = 'Contacted';
         c.last_contacted = new Date().toISOString();
+        touch(c);
       }
     } catch (err) {
       result = 'Error: ' + err.message;
       state.sendStatus[c.id + '|' + contact.email] = '✗';
       fail++;
     }
-    state.activity.unshift({ id: uid(), date: new Date().toISOString(), dealId: deal.id, dealName: deal.name, companyId: c.id, companyName: c.name, contactName: contact.name || '', email: contact.email, subject: m.subject, result, ok: result === 'Sent' });
+    const entry = { id: uid(), date: new Date().toISOString(), dealId: deal.id, dealName: deal.name, companyId: c.id, companyName: c.name, contactName: contact.name || '', email: contact.email, subject: m.subject, result, ok: result === 'Sent', by: Store.user?.email || '' };
+    state.activity.unshift(entry);
+    entries.push(entry);
     renderEmail();
     if (i < sends.length - 1) await sleep((Number(state.settings.delaySec) || 3) * 1000);
   }
-  save.activity();
-  save.companies();
+  try { await Store.addActivity(entries, state.activity); } catch (err) { toast('Could not save activity: ' + err.message); }
   renderCompanies();
   $('#sendProgress').innerHTML = `<span class="ok">${ok} done</span>${fail ? `, <span class="err">${fail} failed</span>` : ''}.` + (mode === 'draft' ? ' Open Outlook → Drafts to review and send.' : '');
   $('#sendBtn').disabled = false;
 });
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ---------- Microsoft Graph ----------
 const SCOPES = ['User.Read', 'Mail.Send', 'Mail.ReadWrite'];
@@ -808,7 +1188,7 @@ async function getToken() {
 function renderAccount() {
   let a = null;
   try { const app = state.settings.clientId && getMsal(); a = app && (app.getActiveAccount() || app.getAllAccounts()[0]); } catch { /* not configured */ }
-  $('#account').textContent = a ? `Signed in: ${a.username}` : 'Not signed in to Outlook';
+  $('#account').textContent = a ? `Outlook: ${a.username}` : 'Outlook not connected';
 }
 
 const textToHtml = t => `<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt">${esc(t).replace(/\n/g, '<br>')}</div>`;
@@ -841,27 +1221,79 @@ function renderActivity() {
   const list = state.activity.filter(a => !q || [a.dealName, a.companyName, a.contactName, a.email, a.subject, a.result].join(' ').toLowerCase().includes(q));
   $('#activityTable tbody').innerHTML = list.slice(0, 1000).map(a => `
     <tr><td>${new Date(a.date).toLocaleString()}</td><td>${esc(a.dealName)}</td><td>${esc(a.companyName)}</td><td>${esc(a.contactName ? `${a.contactName} <${a.email}>` : a.email)}</td><td>${esc(a.subject)}</td>
-    <td class="${a.result.startsWith('Error') ? 'err' : 'ok'}">${esc(a.result)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">No emails yet.</td></tr>';
+    <td class="${a.result.startsWith('Error') ? 'err' : 'ok'}">${esc(a.result)}</td></tr>`).join('') || '<tr><td colspan="6"><div class="empty">No emails yet.</div></td></tr>';
 }
 $('#activitySearch').addEventListener('input', renderActivity);
 $('#exportActivity').addEventListener('click', () => downloadSheet(state.activity.map(({ id, dealId, companyId, ok, ...rest }) => rest), 'activity.xlsx'));
 
-// ---------- Settings & backup ----------
+// ---------- Settings ----------
+const OUTLOOK_KEYS = ['clientId', 'tenantId', 'senderName', 'delaySec'];
 function renderSettings() {
-  for (const k of ['clientId', 'tenantId', 'senderName', 'delaySec']) $('#' + k).value = state.settings[k] ?? '';
+  for (const k of OUTLOOK_KEYS) $('#' + k).value = state.settings[k] ?? '';
+  $('#anthropicKey').value = state.settings.anthropicKey || '';
+  $('#enrichModel').innerHTML = Object.entries(Enricher.MODELS).map(([id, m]) => `<option value="${id}" ${id === state.settings.enrichModel ? 'selected' : ''}>${esc(m.label)}</option>`).join('');
+  $('#enrichParallel').value = state.settings.enrichParallel;
+  $('#enrichSkipDays').value = state.settings.enrichSkipDays;
+  renderSpend();
+
+  const fromConfig = !!(window.CRM_CONFIG?.supabaseUrl && window.CRM_CONFIG?.supabaseAnonKey);
+  $('#dbStatus').innerHTML = Store.mode === 'cloud'
+    ? `<p><span class="chip green">Connected</span> ${Store.user ? 'Logged in as <b>' + esc(Store.user.email) + '</b>' : ''}</p>`
+    : '<p><span class="chip amber">Not connected</span> Data is stored in this browser only.</p>';
+  $('#dbConfig').hidden = fromConfig;
+  $('#sbUrl').value = localStorage.getItem('crm.supabaseUrl') || '';
+  $('#sbKey').value = localStorage.getItem('crm.supabaseAnonKey') || '';
+  $('#copyLocal').hidden = Store.mode !== 'cloud';
+  $('#signOutDb').hidden = Store.mode !== 'cloud';
+}
+function renderSpend() {
+  const s = state.settings.spend;
+  $('#claudeSpend').textContent = s.count ? `So far in this browser: ${s.count} companies researched · ≈ $${s.usd.toFixed(2)} (≈ $${(s.usd / s.count).toFixed(2)} each)` : '';
 }
 $('#saveSettings').addEventListener('click', () => {
-  for (const k of ['clientId', 'tenantId', 'senderName', 'delaySec']) state.settings[k] = $('#' + k).value.trim();
-  save.settings();
+  for (const k of OUTLOOK_KEYS) state.settings[k] = $('#' + k).value.trim();
+  saveSettingsLocal();
   renderAccount();
   toast('Settings saved.');
 });
+$('#saveClaude').addEventListener('click', () => {
+  state.settings.anthropicKey = $('#anthropicKey').value.trim();
+  state.settings.enrichModel = $('#enrichModel').value;
+  state.settings.enrichParallel = Number($('#enrichParallel').value) || 2;
+  state.settings.enrichSkipDays = Number($('#enrichSkipDays').value) || 0;
+  saveSettingsLocal();
+  toast('Claude settings saved.');
+});
+$('#saveDb').addEventListener('click', () => {
+  const u = $('#sbUrl').value.trim(), k = $('#sbKey').value.trim();
+  if (!u || !k) { localStorage.removeItem('crm.supabaseUrl'); localStorage.removeItem('crm.supabaseAnonKey'); }
+  else { localStorage.setItem('crm.supabaseUrl', u); localStorage.setItem('crm.supabaseAnonKey', k); }
+  location.reload();
+});
+$('#signOutDb').addEventListener('click', async () => { await flush(); await Store.signOut(); location.reload(); });
+$('#copyLocal').addEventListener('click', async () => {
+  const local = (await Store.localCompanies()).map(migrate);
+  if (!local.length) return toast('There is no data stored in this browser.');
+  if (!confirm(`Copy ${local.length} companies from this browser into the team database? Duplicates are merged.`)) return;
+  const idx = Engine.buildIndex(state.companies);
+  let added = 0, merged = 0;
+  for (const c of local) {
+    const same = Engine.findDuplicates(c, idx).exact[0];
+    if (same) { Engine.mergeCompanies(same, c); touch(same); merged++; }
+    else { state.companies.push(c); Engine.indexAdd(idx, c); touch(c); added++; }
+  }
+  await flush();
+  renderCompanies();
+  toast(`Copied: ${added} new, ${merged} merged.`, 6000);
+});
 $('#signIn').addEventListener('click', async () => { try { await signIn(); toast('Signed in.'); } catch (e) { toast(e.message, 6000); } });
 $('#signOut').addEventListener('click', async () => { try { const app = getMsal(); await app.logoutPopup({ account: app.getActiveAccount() }); } catch (e) { toast(e.message); } renderAccount(); });
+
+// ---------- Backup ----------
 $('#backup').addEventListener('click', () => {
-  const data = { version: 2, exported: new Date().toISOString(), companies: state.companies, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory };
+  const data = { version: 3, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory };
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
   a.download = `mna-crm-backup-${new Date().toISOString().slice(0, 10)}.json`;
   a.click();
 });
@@ -872,23 +1304,26 @@ $('#restore').addEventListener('change', async e => {
   try {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.companies)) throw new Error('Not a CRM backup file');
-    if (!confirm(`Replace current data with backup (${d.companies.length} companies)?`)) return;
-    Object.assign(state, {
-      companies: d.companies.map(migrate), templates: d.templates?.length ? d.templates : [DEFAULT_TEMPLATE], activity: d.activity || [],
-      weights: d.weights || { ...Engine.DEFAULT_WEIGHTS }, mappingMemory: d.mappingMemory || {},
-    });
-    await Promise.all([save.companies(), save.templates(), save.activity(), save.weights(), save.mapping()]);
+    if (!confirm(`Restore ${d.companies.length} companies from this backup? Companies with the same ID are overwritten; others are kept.`)) return;
+    const incoming = d.companies.map(migrate);
+    const map = new Map(state.companies.map(c => [c.id, c]));
+    incoming.forEach(c => map.set(c.id, c));
+    state.companies = [...map.values()];
+    incoming.forEach(c => dirty.add(c.id));
+    if (d.templates?.length) { state.templates = d.templates; saveShared('templates', state.templates); }
+    if (d.weights) { state.weights = d.weights; saveShared('weights', state.weights); }
+    if (d.mappingMemory) { state.mappingMemory = d.mappingMemory; saveShared('mappingMemory', state.mappingMemory); }
+    await flush();
     renderAll();
     toast('Backup restored.');
   } catch (err) { toast('Restore failed: ' + err.message, 6000); }
 });
 $('#exportAll').addEventListener('click', () => downloadSheet(state.companies.map(flatten), `crm-companies-${new Date().toISOString().slice(0, 10)}.xlsx`));
-$('#wipe').addEventListener('click', () => {
-  if (!confirm('Delete ALL companies from this browser? Download a backup first if unsure.')) return;
-  state.companies = [];
+$('#wipe').addEventListener('click', async () => {
+  const who = Store.mode === 'cloud' ? 'for the WHOLE TEAM' : 'from this browser';
+  if (prompt(`This deletes all ${state.companies.length} companies ${who}. Download a backup first.\n\nType DELETE to confirm.`) !== 'DELETE') return;
   state.campaign = { dealId: null, recipientIds: [] };
-  state.selected.clear();
-  save.companies();
+  await removeCompanies(state.companies.map(c => c.id));
   renderAll();
 });
 
@@ -899,10 +1334,12 @@ function flatten(c) {
   const row = Object.fromEntries(Engine.COMPANY_FIELDS.map(f => [f.label, c[f.key] ?? '']));
   c.contacts.forEach((x, i) => {
     const n = i ? ` ${i + 1}` : '';
-    Object.assign(row, { [`Contact name${n}`]: x.name || '', [`Function${n}`]: x.title || '', [`E-mail${n}`]: x.email || '', [`Phone${n}`]: x.phone || '' });
+    Object.assign(row, { [`Contact name${n}`]: x.name || '', [`Function${n}`]: x.title || '', [`E-mail${n}`]: x.email || '', [`Phone${n}`]: x.phone || '', [`LinkedIn${n}`]: x.linkedin || '' });
   });
+  row.Acquisitions = (c.acquisitions || []).map(a => `${a.target}${a.year ? ` (${a.year})` : ''}`).join('; ');
   row.Projects = c.projects.map(p => [p.project, p.status].filter(Boolean).join(': ')).join(' | ');
   row.Sources = c.sources.join('; ');
+  row['Researched by Claude'] = c.enrichment ? c.enrichment.at.slice(0, 10) : '';
   return row;
 }
 function downloadSheet(rows, filename) {
@@ -920,12 +1357,41 @@ function renderAll() {
   renderAccount();
 }
 
-(async function init() {
-  state.companies = (await DB.get('companies', [])).map(migrate);
-  state.templates = await DB.get('templates', [DEFAULT_TEMPLATE]);
-  state.activity = await DB.get('activity', []);
-  state.settings = { ...state.settings, ...(await DB.get('settings', {})) };
-  state.weights = { ...Engine.DEFAULT_WEIGHTS, ...(await DB.get('weights', {})) };
-  state.mappingMemory = await DB.get('mappingMemory', {});
+// ---------- Start ----------
+async function loadData() {
+  setSync('Loading…');
+  const [companies, templates, activity, weights, mapping] = await Promise.all([
+    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null),
+  ]);
+  state.companies = companies.map(migrate);
+  state.templates = templates?.length ? templates : [DEFAULT_TEMPLATE];
+  state.activity = activity || [];
+  state.weights = { ...Engine.DEFAULT_WEIGHTS, ...(weights || {}) };
+  state.mappingMemory = mapping || {};
+  setSync(`${state.companies.length.toLocaleString()} companies loaded`);
   renderAll();
+}
+
+(async function init() {
+  try {
+    const { mode, user } = await Store.init();
+    if (mode === 'cloud' && !user) {
+      $('#login').hidden = false;
+      $('#loginEmail').placeholder = `you@${Store.domain}`;
+      $('#loginBtn').addEventListener('click', async () => {
+        $('#loginMsg').textContent = 'Sending…';
+        try {
+          await Store.sendLoginLink($('#loginEmail').value);
+          $('#loginMsg').innerHTML = '<span class="ok">Check your inbox and click the link in the email.</span>';
+        } catch (err) { $('#loginMsg').innerHTML = `<span class="err">${esc(err.message)}</span>`; }
+      });
+      return;
+    }
+    await loadData();
+  } catch (err) {
+    console.error(err);
+    setSync('Could not load data', true);
+    toast('Could not load data: ' + err.message, 10000);
+    renderAll();
+  }
 })();
