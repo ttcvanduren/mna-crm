@@ -21,7 +21,8 @@
     <aside class="sidebar">
       <div class="brand"><span class="logo-mark">M&amp;A</span> CRM</div>
       <nav>
-        <button class="tab active" data-tab="projects"><span class="ico">◆</span>Projects</button>
+        <button class="tab active" data-tab="dashboard"><span class="ico">◉</span>Dashboard</button>
+        <button class="tab" data-tab="projects"><span class="ico">◆</span>Projects</button>
         <div id="navProjects" class="nav-projects"></div>
         <button class="tab" data-tab="companies"><span class="ico">▦</span>Companies</button>
         <button class="tab" data-tab="match"><span class="ico">◎</span>Match engine</button>
@@ -37,7 +38,8 @@
 
     <main>
       <!-- PROJECTS -->
-      <section id="tab-projects" class="panel active"><div id="projectsView"></div></section>
+      <section id="tab-dashboard" class="panel active"><div id="dashboardView"></div></section>
+      <section id="tab-projects" class="panel"><div id="projectsView"></div></section>
 
       <!-- COMPANIES -->
       <section id="tab-companies" class="panel">
@@ -87,6 +89,7 @@
         <div id="bulkBar" class="bulk-bar" hidden>
           <span id="bulkCount"></span>
           <button class="btn primary" id="bulkResearchExport" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
+          <button class="btn" id="bulkPeople" title="Find CEO / CFO / Corp Dev / M&A people with Apollo">👤 Find people (Apollo)</button>
           <button class="btn" id="bulkEnrich" title="Research directly via the Anthropic API (paid per company)">Research via API</button>
           <button class="btn" id="bulkExport">Export</button>
           <button class="btn danger" id="bulkDelete">Delete</button>
@@ -202,6 +205,11 @@
       <section id="tab-settings" class="panel">
         <div class="page-head"><div><h1>Settings</h1></div></div>
         <div class="settings-grid">
+          <div class="card span-all">
+            <h2>Connectors</h2>
+            <p class="muted small">Everything works without these. Each connector adds data or automation when set up.</p>
+            <div id="connectors" class="connectors"></div>
+          </div>
           <div class="card">
             <h2>Team database</h2>
             <div id="dbStatus" class="small"></div>
@@ -285,6 +293,9 @@
     </form>
   </dialog>
 
+  <!-- Offer / pass / Apollo dialog -->
+  <dialog id="stageDialog"><form method="dialog" id="stageForm"></form></dialog>
+
   <!-- Project dialog -->
   <dialog id="projectDialog"><form method="dialog" id="projectForm"></form></dialog>
 
@@ -298,5 +309,7 @@
   <script src="app.js"></script>
   <script src="projects.js"></script>
   <script src="pipeline.js"></script>
+  <script src="process.js"></script>
+  <script src="connectors.js"></script>
 </body>
 </html>

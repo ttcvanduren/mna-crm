@@ -127,6 +127,7 @@ window.addEventListener('beforeunload', e => { if (dirty.size) { flush(); e.prev
 function showTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  if (name === 'dashboard') renderDashboard();
   if (name === 'projects') renderProjects();
   if (name === 'companies') renderCompanies();
   if (name === 'email') renderEmail();
@@ -268,6 +269,7 @@ $('#bulkDelete').addEventListener('click', async () => {
   renderCompanies();
 });
 $('#bulkEnrich').addEventListener('click', () => startResearch([...state.picked]));
+$('#bulkPeople').addEventListener('click', () => apolloBulk([...state.picked]));
 
 // Descriptions written by Claude Code from the data in your own lists (no web research).
 async function importDescriptions(items) {
@@ -318,6 +320,7 @@ $('#importResearch').addEventListener('change', async e => {
     const d = JSON.parse(await f.text());
     const items = Array.isArray(d) ? d : d.companies;
     if (d.type === 'mna-crm-descriptions') return importDescriptions(items);
+    if (d.type === 'mna-crm-people') return importPeopleFile(d);
     if (!Array.isArray(items) || !items.some(x => x.profile)) throw new Error('This is not a research results file.');
     const idx = Engine.buildIndex(state.companies);
     let updated = 0, added = 0, skipped = 0;
@@ -435,7 +438,9 @@ function renderDrawer() {
           </div>
           <div class="muted small" style="margin-top:4px">${p.source === 'Claude' ? `Found by Claude${p.source_url ? ` · <a href="${esc(p.source_url)}" target="_blank" rel="noopener">source</a>` : ''}` : 'From your lists'}${p.verified_at ? ` · checked ${ago(p.verified_at)}` : ''}</div>
         </div></div>`).join('')}</div>` : `<div class="empty">No people yet.${c.enrichment ? '' : ' Research with Claude to find the CEO, CFO and Corp Dev / M&A contacts.'}</div>`;
-    body += `<p class="muted small" style="margin-top:12px">Claude doesn't look up email addresses. Add them via <b>Edit</b> or by importing a list.</p>`;
+    body = `<div class="toolbar"><span class="muted small">Outreach goes to the best contact first: M&A → Corp Dev → Strategy → CEO → CFO.</span><span class="spacer"></span>
+      <button class="btn primary" data-act="people">👤 Find decision makers${apolloConfigured() ? ' (Apollo)' : ''}</button></div>` + body;
+    body += `<p class="muted small" style="margin-top:12px">${apolloConfigured() ? 'Apollo search is free; revealing an email costs 1 credit.' : 'Without the Apollo API this exports a request file for Claude Code + Apollo; import the result with ✦ Import research.'}</p>`;
   } else if (tab === 'acquisitions') {
     const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.year).localeCompare(String(a.year)));
     body = acq.length ? `<div class="timeline">${acq.map(a => `<div class="tl-item"><div class="tl-year">${esc(a.year || 'Year unknown')}</div>
@@ -486,6 +491,7 @@ $('#drawer').addEventListener('click', e => {
   if (act === 'close') closeDrawer();
   if (act === 'edit') openEdit(id);
   if (act === 'research') startResearch([id], { force: true });
+  if (act === 'people') findDecisionMakers(id);
   if (act === 'export') {
     const keep = new Set(state.picked);
     state.picked = new Set([id]);
@@ -1070,12 +1076,13 @@ function syncCampaign() {
 
 // ---------- Email ----------
 // Which contacts of a company get the email: 'primary' (first with email), 'all', or a contact index.
+// 'primary' = the best person by department (M&A → Corp Dev → Strategy → CEO → CFO), verified emails first.
 function sendsFor(c) {
-  const withEmail = c.contacts.map((x, i) => ({ x, i })).filter(o => o.x.email);
+  const best = Engine.bestContacts(c);
   const ch = state.contactChoice[c.id] ?? 'primary';
-  if (ch === 'all') return withEmail.map(o => o.x);
-  if (ch === 'primary') return withEmail.slice(0, 1).map(o => o.x);
-  return c.contacts[+ch]?.email ? [c.contacts[+ch]] : withEmail.slice(0, 1).map(o => o.x);
+  if (ch === 'all') return best;
+  if (ch === 'primary') return best.slice(0, 1);
+  return c.contacts[+ch]?.email ? [c.contacts[+ch]] : best.slice(0, 1);
 }
 const allSends = () => state.campaign.recipientIds.map(byId).filter(Boolean).flatMap(c => sendsFor(c).map(contact => ({ company: c, contact })));
 
@@ -1134,13 +1141,15 @@ function renderEmail() {
   if (!ids.includes(state.previewId)) state.previewId = ids[0] || null;
   $('#recipients').innerHTML = ids.map(id => {
     const c = byId(id);
-    const withEmail = c.contacts.map((x, i) => ({ x, i })).filter(o => o.x.email);
+    const best = Engine.bestContacts(c);
+    const withEmail = best.map(x => ({ x, i: c.contacts.indexOf(x) }));
+    const label = x => `${x.name || x.email}${x.role_tag || x.title ? ` (${x.role_tag || Engine.inferRoleTag(x.title)})` : ''}`;
     const ch = String(state.contactChoice[c.id] ?? 'primary');
     const sel = withEmail.length > 1 ? `<select data-cc="${id}">
-        <option value="primary" ${ch === 'primary' ? 'selected' : ''}>${esc(withEmail[0].x.name || withEmail[0].x.email)}</option>
-        ${withEmail.slice(1).map(o => `<option value="${o.i}" ${ch === String(o.i) ? 'selected' : ''}>${esc(o.x.name || o.x.email)}</option>`).join('')}
+        <option value="primary" ${ch === 'primary' ? 'selected' : ''}>Best: ${esc(label(withEmail[0].x))}</option>
+        ${withEmail.slice(1).map(o => `<option value="${o.i}" ${ch === String(o.i) ? 'selected' : ''}>${esc(label(o.x))}</option>`).join('')}
         <option value="all" ${ch === 'all' ? 'selected' : ''}>All ${withEmail.length} contacts</option></select>`
-      : `<span class="muted small">${esc(withEmail[0].x.name || '')} ${esc(withEmail[0].x.email)}</span>`;
+      : `<span class="muted small">${esc(label(withEmail[0].x))} ${esc(withEmail[0].x.email)}</span>`;
     const st = sendsFor(c).map(x => state.sendStatus?.[c.id + '|' + x.email]).filter(Boolean).join(' ');
     return `<div class="recipient ${id === state.previewId ? 'active' : ''}" data-rid="${id}">
       <span>${esc(c.name)}</span>${sel}
@@ -1434,6 +1443,8 @@ function downloadSheet(rows, filename) {
 }
 
 function renderAll() {
+  renderDashboard();
+  renderConnectors();
   renderProjects();
   renderCompanies();
   renderWeights();

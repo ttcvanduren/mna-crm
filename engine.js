@@ -5,12 +5,12 @@ const Engine = (() => {
   const COMPANY_FIELDS = [
     { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund'] },
     { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site', 'companywebsite', 'webadres'] },
-    { key: 'linkedin_url', label: 'LinkedIn page', aliases: ['companylinkedin', 'linkedinpage', 'linkedincompany', 'linkedincompanypage'] },
+    { key: 'linkedin_url', label: 'LinkedIn page', aliases: ['companylinkedin', 'linkedinpage', 'linkedincompany', 'linkedincompanypage', 'companylinkedinurl'] },
     { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'rol'] },
     { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
     { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
-    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry'] },
-    { key: 'hq_city', label: 'HQ city', aliases: ['city', 'hqcity', 'plaats', 'stad'] },
+    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry', 'companycountry'] },
+    { key: 'hq_city', label: 'HQ city', aliases: ['hqcity', 'companycity', 'plaats', 'stad', 'city'] },
     { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography'] },
     { key: 'currency', label: 'Currency', aliases: ['currency', 'valuta', 'reportingcurrency'] },
     { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
@@ -36,7 +36,14 @@ const Engine = (() => {
     { key: 'title', label: 'function', aliases: ['function', 'title', 'jobtitle', 'functie', 'position', 'contacttitle', 'contactfunction'] },
     { key: 'email', label: 'email', aliases: ['email', 'emailaddress', 'mail', 'contactemail', 'emailadres'] },
     { key: 'phone', label: 'phone', aliases: ['phone', 'telephone', 'tel', 'telefoon', 'mobile', 'phonenumber'] },
-    { key: 'linkedin', label: 'LinkedIn', aliases: ['linkedin', 'linkedinurl', 'linkedinprofile', 'contactlinkedin'] },
+    { key: 'linkedin', label: 'LinkedIn', aliases: ['linkedin', 'linkedinurl', 'linkedinprofile', 'contactlinkedin', 'personlinkedinurl', 'contactlinkedinurl'] },
+    // Apollo-style exports split the name and add verification and department info.
+    { key: 'first', label: 'first name', aliases: ['firstname', 'voornaam', 'vorname'] },
+    { key: 'last', label: 'last name', aliases: ['lastname', 'surname', 'achternaam', 'nachname'] },
+    { key: 'email_status', label: 'email status', aliases: ['emailstatus', 'emailverification'] },
+    { key: 'seniority', label: 'seniority', aliases: ['seniority'] },
+    { key: 'department', label: 'department', aliases: ['departments', 'department', 'subdepartments'] },
+    { key: 'apollo_id', label: 'Apollo ID', aliases: ['apollocontactid', 'apolloid', 'apollopersonid'] },
   ];
   // Per-project information (a buyer can appear in many projects with a different status each time).
   const PROJECT_FIELDS = [
@@ -59,23 +66,57 @@ const Engine = (() => {
     if (!t) return 'Not approached';
     if (/pass|declin|not interested|no interest|dropped|rejected|lost/.test(t)) return 'Passed';
     if (/not (yet )?approached|^1\.|to approach|^new$/.test(t)) return 'Not approached';
-    if (/nda|\bim\b|info ?memo|meeting|session|positive|conversation|interested|review|loi|offer|due diligence|dd\b|^[5-9]\./.test(t)) return 'Engaged';
+    if (/nda|\bim\b|info ?memo|meeting|session|positive|conversation|interested|review|loi|\bioi\b|offer|binding|signed|data ?room|due diligence|dd\b|exclusiv|^[5-9]\./.test(t)) return 'Engaged';
     if (/teaser|reminder|contact|awaiting|no response|approached|sent|group level|via group|^[2-4]\./.test(t)) return 'Approached';
     return 'Other';
   }
 
-  // Columns of the pipeline board, in process order.
-  const BOARD_STAGES = ['Not approached', 'Teaser sent', 'Reminder sent', 'NDA signed', 'IM sent', 'Meeting', 'Offer', 'Passed'];
+  // Sell-side process stages per buyer, in order. Each stage also stamps a milestone date (DATE_KEYS).
+  const BOARD_STAGES = ['Not approached', 'Teaser sent', 'Reminder sent', 'NDA sent', 'NDA signed', 'IM sent', 'IOI received', 'Management meeting', 'Data room / DD', 'Binding offer', 'Signed', 'Passed'];
+  const DATE_KEYS = { 'Teaser sent': 'teaser', 'Reminder sent': 'reminder', 'NDA sent': 'nda_sent', 'NDA signed': 'nda_signed', 'IM sent': 'im', 'IOI received': 'ioi', 'Management meeting': 'meeting', 'Data room / DD': 'dataroom', 'Binding offer': 'binding', 'Signed': 'signed', 'Passed': 'passed' };
   function boardStage(s) {
     const t = lower(s);
     if (!t || /not (yet )?approached|^1\./.test(t)) return 'Not approached';
     if (/pass|declin|not interested|no interest|dropped|rejected/.test(t)) return 'Passed';
-    if (/offer|\bioi\b|\bloi\b|\bbid\b|term sheet/.test(t)) return 'Offer';
-    if (/meeting|session|call|visit/.test(t)) return 'Meeting';
-    if (/\bim\b|info ?memo|under review|data ?room|\bcim\b/.test(t)) return 'IM sent';
+    if (/\bsigned\b(?!.*nda)|closed|completion|\bspa\b(?! mark)/.test(t) && !/nda/.test(t)) return 'Signed';
+    if (/binding|\bloi\b|letter of intent|exclusiv|final offer/.test(t)) return 'Binding offer';
+    if (/data ?room|due diligence|\bdd\b|\bvdr\b/.test(t)) return 'Data room / DD';
+    if (/meeting|session|presentation|call|visit|\bmp\b/.test(t)) return 'Management meeting';
+    if (/\bioi\b|indicative|offer|\bbid\b|term sheet/.test(t)) return 'IOI received';
+    if (/\bim\b|info ?memo|under review|\bcim\b/.test(t)) return 'IM sent';
+    if (/nda (sent|requested|out)|nda mark|positive|interested|conversation|^9\./.test(t)) return 'NDA sent';
     if (/nda/.test(t)) return 'NDA signed';
     if (/reminder|no response|awaiting|^[34]\./.test(t)) return 'Reminder sent';
     return 'Teaser sent';
+  }
+  const stageIndex = s => BOARD_STAGES.indexOf(boardStage(s));
+  // Furthest real stage a buyer reached in a project (Passed doesn't count as progress).
+  const reachedIndex = p => Math.max(stageIndex(p.status) === BOARD_STAGES.length - 1 ? 0 : stageIndex(p.status), p.furthest_stage ? stageIndex(p.furthest_stage) : 0);
+
+  const PASS_REASONS = ['Price / valuation', 'Strategic fit', 'Size (too small/large)', 'Timing / other priorities', 'Product / technology overlap', 'Geography', 'Competitor or conflict', 'No response', 'Seller declined buyer', 'Other'];
+
+  // Role tag from a job title, used to pick the right person to email.
+  function inferRoleTag(title) {
+    const t = lower(title);
+    if (!t) return '';
+    if (/m&a|m & a|mergers|acquisitions|\bm and a\b/.test(t)) return 'M&A';
+    if (/corporate development|corp\.? ?dev|corporate finance/.test(t)) return 'Corporate Development';
+    if (/strateg/.test(t)) return 'Strategy';
+    if (/\bceo\b|chief executive|managing director|geschäftsführer|geschaftsfuhrer|\bmd\b|president|algemeen directeur/.test(t)) return 'CEO';
+    if (/\bcfo\b|chief financial|finance director|financial director|head of finance/.test(t)) return 'CFO';
+    if (/founder|owner|eigenaar|gründer/.test(t)) return 'Founder';
+    if (/\bcoo\b|chief operating/.test(t)) return 'COO';
+    if (/\bcto\b|chief technology/.test(t)) return 'CTO';
+    if (/chair|board|aufsichtsrat|supervisory/.test(t)) return 'Board';
+    if (/partner|principal|investment (manager|director)|associate/.test(t)) return 'Investment team';
+    if (/business development|\bbd\b|partnership/.test(t)) return 'Business Development';
+    return 'Other';
+  }
+  // Who should receive deal outreach first.
+  const OUTREACH_PRIORITY = ['M&A', 'Corporate Development', 'Investment team', 'Strategy', 'CEO', 'Founder', 'CFO', 'Business Development', 'COO', 'Board', 'CTO', 'Other', ''];
+  function bestContacts(c) {
+    const rank = x => OUTREACH_PRIORITY.indexOf(x.role_tag || inferRoleTag(x.title)) + (x.email_status && x.email_status !== 'verified' ? 0.5 : 0);
+    return (c.contacts || []).filter(x => x.email).sort((a, b) => rank(a) - rank(b));
   }
 
   // Simple ownership buckets for filtering.
@@ -277,7 +318,9 @@ const Engine = (() => {
       const [scope, key] = t.split('.');
       if (scope === 'company') {
         const f = COMPANY_FIELDS.find(x => x.key === key);
-        const v = f.num ? parseNumber(raw, f.money ? unitMult : 1) : clean(raw);
+        let v = f.num ? parseNumber(raw, f.money ? unitMult : 1) : clean(raw);
+        // Absolute amounts (e.g. Apollo's "Annual Revenue" 12500000) in a millions column.
+        if (f.money && typeof v === 'number' && v > 100000 && unitMult === 1) v = v / 1e6;
         if (v !== '' && v != null && company[key] == null) company[key] = v;
       } else if (scope.startsWith('contact')) {
         const idx = +scope.slice(7) - 1;
@@ -305,6 +348,13 @@ const Engine = (() => {
     if (company.website && !/[a-z0-9-]\.[a-z]{2,}/i.test(company.website)) delete company.website; // e.g. "Reference", "n/a"
     if (!company.currency && (company.revenue != null || company.ebitda != null)) company.currency = opts.currency || 'EUR';
     project.remarks = project.remarks.join(' | ');
+    for (const ct of contacts) {
+      if (!ct) continue;
+      if (!ct.name && (ct.first || ct.last)) ct.name = [ct.first, ct.last].filter(Boolean).join(' ');
+      delete ct.first; delete ct.last;
+      if (ct.email_status) ct.email_status = lower(ct.email_status);
+      if (ct.title && !ct.role_tag) ct.role_tag = inferRoleTag(ct.title);
+    }
     return { company, contacts: contacts.filter(c => c && (c.name || c.email)), project };
   }
 
@@ -512,14 +562,17 @@ const Engine = (() => {
     return [0.2, null];
   }
 
-  // How this buyer behaved in our earlier projects.
+  // How seriously this buyer engaged in our earlier projects ("historical seriousness").
   function historyScore(cand, deal) {
     const others = (cand.projects || []).filter(p => p.project && p.project !== deal.project);
     if (!others.length) return [0.4, null];
-    const g = others.map(p => stageGroup(p.status));
-    if (g.includes('Engaged')) return [1, `Engaged in ${others.find(p => stageGroup(p.status) === 'Engaged').project}`];
-    if (g.includes('Passed')) return [0.3, `Passed in ${others.find(p => stageGroup(p.status) === 'Passed').project}`];
-    return [0.6, `Known from ${others[0].project}`];
+    const best = others.reduce((a, p) => (reachedIndex(p) > reachedIndex(a) ? p : a), others[0]);
+    const r = reachedIndex(best);
+    if (r >= BOARD_STAGES.indexOf('IOI received')) return [1, `Reached ${BOARD_STAGES[r]} in ${best.project}`];
+    if (r >= BOARD_STAGES.indexOf('NDA signed')) return [0.85, `Signed NDA in ${best.project}`];
+    const passed = others.find(p => stageGroup(p.status) === 'Passed');
+    if (passed) return [0.3, `Passed in ${passed.project}${passed.pass_reason ? ` (${passed.pass_reason.slice(0, 30)})` : ''}`];
+    return [0.55, `Known from ${others[0].project}`];
   }
 
   function match(deal, companies, weights = DEFAULT_WEIGHTS) {
@@ -567,7 +620,7 @@ const Engine = (() => {
   }
 
   return {
-    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, boardStage, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
+    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
     normName, domainOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };

@@ -15,7 +15,7 @@ The data lives in a **shared team database** (Supabase) once connected, or in yo
 
 Upload these files to your `mna-crm` repo with **Add file → Upload files → Commit changes**:
 
-`index.html`, `app.js`, `projects.js`, `pipeline.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
+`index.html`, `app.js`, `projects.js`, `pipeline.js`, `process.js`, `connectors.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
 
 **Don't upload** `CLAUDE.md`, `sample-companies.csv`, or the `.claude`, `database` and `research` folders. They contain client data or local tooling.
 
@@ -67,6 +67,31 @@ This uses your subscription's usage limits instead of paid API calls. It works w
 - Claude **does not log into LinkedIn**. It only uses LinkedIn pages and numbers that are publicly visible in search results.
 - Claude **never guesses email addresses**. Emails come from your own lists, or you add them by hand.
 - Your own data always wins: Claude only fills in empty fields, and never overwrites what you imported.
+
+## Dashboard
+
+The home page across all active mandates:
+- **KPIs:** contacted, in process, NDAs, IOIs, open actions.
+- **Next best actions:** sorted by urgency. Examples: IOI deadline coming with buyers who haven't bid, NDAs to chase, reminders and calls due, tier-1 buyers not yet approached, phases behind plan.
+- **Mandate cards:** current phase, week X of Y, and best offer.
+- **Conversion funnel:** compared with market benchmarks. Typically ~30% of contacted buyers sign an NDA and 5–15 in 100 submit an IOI.
+- **Why buyers pass:** a breakdown of pass reasons.
+
+## Apollo: decision makers and verified emails
+
+Three options, from simplest to most automated:
+1. **CSV export:** export a people list in Apollo, then use **Import Excel / CSV**. First/Last Name, Title, Email, Email Status, Seniority, Departments, Person Linkedin Url, Website and Apollo Contact Id are recognised, and each person is added to the right company.
+2. **Claude Code (subscription):**
+   - Select companies, then click **👤 Find people**. This downloads `people-request-….json`.
+   - In Claude Code, connect Apollo once: type `/mcp` and choose Apollo.
+   - Ask Claude to *"find the decision makers in Downloads\people-request-….json"*.
+   - Import the result with **✦ Import research**.
+3. **Apollo API (in-app):** deploy `supabase/functions/apollo/index.ts` as a Supabase Edge Function named `apollo`.
+   - Set the secrets `APOLLO_API_KEY` and `ALLOWED_ORIGIN` (your GitHub Pages address).
+   - Paste the function URL in **Settings → Connectors**.
+   - **Find decision makers** then searches Apollo directly, which is free, and reveals emails at 1 credit each.
+
+Choose which departments to look for under **Settings → Connectors**: M&A / Corp Dev, Strategy, CEO/MD, CFO, Founder, PE investment team. Outreach always goes to the best contact first (M&A → Corp Dev → Strategy → CEO → CFO), and verified emails come before unverified ones. GDPR: email business contacts only, for a relevant reason, with an opt-out.
 
 ## 4. Running a deal in a project
 

@@ -58,6 +58,12 @@ const Store = (() => {
     if (!email.endsWith('@' + domain)) throw new Error(`Use your @${domain} email address.`);
     check(await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } }));
   }
+  // Token for calling the team's Supabase Edge Functions (e.g. the Apollo proxy).
+  async function accessToken() {
+    if (!sb) return anonKey || '';
+    const { data } = await sb.auth.getSession();
+    return data.session?.access_token || anonKey;
+  }
   async function signOut() { if (sb) await sb.auth.signOut(); user = null; }
 
   async function loadCompanies() {
@@ -112,7 +118,7 @@ const Store = (() => {
   const localCompanies = () => idb.get('companies', []);
 
   return {
-    mode, domain, init, sendLoginLink, signOut, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies,
+    mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies,
     get user() { return user; },
     get configured() { return !!(url && anonKey); },
   };

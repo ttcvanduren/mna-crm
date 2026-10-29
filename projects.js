@@ -136,17 +136,19 @@ function renderProjectDetail(name) {
       <span class="spacer"></span>
       <select id="pfMove"><option value="">Move selected to…</option>${Engine.BOARD_STAGES.map(s => `<option>${s}</option>`).join('')}</select>
       <button class="btn" id="projResearch">✦ Export for research</button>
+      <button class="btn" id="pfPeople">👤 Find people</button>
       <button class="btn primary" id="pfEmail">✉ Email selected</button>
     </div>
     <div class="table-wrap">
       <table class="data" id="projectTable"><thead><tr>
-        <th class="cb"><input type="checkbox" id="pfAll"></th><th>Company</th><th>Tier</th><th>Current stage</th><th>Furthest</th><th>Resp.</th><th>Last contact</th><th>People</th><th>Rationale / notes</th>
+        <th class="cb"><input type="checkbox" id="pfAll"></th><th>Company</th><th>Tier</th><th>Heat</th><th>Current stage</th><th>Furthest</th><th>Resp.</th><th>Last contact</th><th>People</th><th>Rationale / notes</th>
       </tr></thead><tbody>
-      ${rows.map(({ c, p }) => `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
+      ${rows.slice(0, 400).map(({ c, p }) => `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
         <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
         <td>${companyCell(c)}</td>
         <td>${p.tier ? `<span class="tier t${esc(p.tier)}">T${esc(p.tier)}</span>` : ''}</td>
-        <td>${stageChip(p.status)}</td>
+        <td>${heatChip(c, p)}</td>
+        <td>${stageChip(p.status)} ${conflictChip(c, name)}</td>
         <td class="small">${p.furthest_stage && p.furthest_stage !== p.status ? esc(p.furthest_stage) : ''}</td>
         <td>${esc(p.responsible || '')}</td>
         <td class="small">${esc(p.last_contact || '')}</td>
@@ -177,6 +179,11 @@ $('#projectsView').addEventListener('click', e => {
   const ptab = e.target.closest('[data-ptab]');
   if (ptab) { state.projectTab = ptab.dataset.ptab; return renderProjects(); }
   if (id === 'backProjects') { state.projectView = null; return renderProjects(); }
+  if (id === 'pfPeople') {
+    const ids = members(state.projectView).map(m => m.c.id).filter(i => state.picked.has(i));
+    if (!ids.length) return toast('Select buyers first.');
+    return apolloBulk(ids);
+  }
   if (id === 'pfEmail') {
     const ids = members(state.projectView).map(m => m.c.id).filter(i => state.picked.has(i));
     return emailFromProject(state.projectView, ids);
