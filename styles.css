@@ -4,6 +4,7 @@
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 14px;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); }
 header { display: flex; align-items: center; gap: 24px; padding: 10px 20px; background: var(--accent); color: #fff; flex-wrap: wrap; }
 header h1 { font-size: 18px; margin: 0; }
@@ -68,4 +69,21 @@ dialog { border: 0; border-radius: 10px; padding: 20px; width: min(760px, 95vw);
 .form-grid .full { grid-column: 1 / -1; }
 #toast { position: fixed; bottom: 20px; right: 20px; background: #1b1f24; color: #fff; padding: 10px 16px; border-radius: 6px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 400px; }
 #toast.show { opacity: 1; }
+dialog.wide { width: 96vw; max-width: 1400px; max-height: 94vh; overflow: auto; }
+dialog h2 { font-size: 17px; margin: 4px 0 12px; }
+dialog h3 { font-size: 13px; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+table.compact th, table.compact td { padding: 4px 8px; }
+tr.unsel td { opacity: .45; }
+details summary { cursor: pointer; padding: 6px 0; }
+.map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 4px 18px; margin-top: 6px; }
+.map-row { display: grid; grid-template-columns: 150px 190px 1fr; gap: 8px; align-items: center; padding: 2px 0; border-bottom: 1px dashed var(--line); }
+.map-row.ignored .map-h { color: var(--muted); text-decoration: line-through; }
+.map-h, .map-s { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-row select { padding: 3px 5px; font-size: 13px; }
+select.dup-exact { border-color: var(--good); background: #f0fbf3; }
+select.dup-possible { border-color: var(--warn); background: #fff8e6; }
+.contact-row { display: grid; grid-template-columns: 1.2fr 1fr 1.4fr 1fr auto; gap: 6px; margin-bottom: 6px; }
+.proj { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; }
+.proj > div { margin-top: 3px; white-space: pre-wrap; }
+.recipient select { padding: 3px 5px; font-size: 13px; max-width: 220px; }
 code { background: #f0f2f4; padding: 1px 4px; border-radius: 3px; font-size: 12px; }

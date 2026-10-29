@@ -1,36 +1,61 @@
-// Matching engine and data helpers. No DOM access here, so it can be tested on its own.
+// Import parsing, duplicate detection and matching. No DOM access here, so it can be tested on its own.
 const Engine = (() => {
-  // Canonical company fields. `aliases` are header names accepted on upload (lowercased, no punctuation).
-  const FIELDS = [
-    { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account'] },
-    { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'category', 'rol', 'companytype'] },
-    { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical'] },
-    { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment'] },
-    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'hqcountry', 'headquarters'] },
+  // ---------- Field definitions ----------
+  // `aliases` are header names (lowercased, letters/digits only) recognised on upload.
+  const COMPANY_FIELDS = [
+    { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund'] },
+    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site'] },
+    { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'companytype', 'rol'] },
+    { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category'] },
+    { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory'] },
+    { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'hqcountry', 'headquarters', 'contactoffice', 'office', 'location'] },
     { key: 'region', label: 'Region', aliases: ['region', 'regio'] },
-    { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'revenuem', 'sales', 'turnover', 'omzet', 'revenueeurm', 'revenuemeur'], num: true },
-    { key: 'ebitda', label: 'EBITDA (m)', aliases: ['ebitda', 'ebitdam', 'ebitdaeurm'], num: true },
-    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff'], num: true },
-    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile'], full: true, long: true },
-    { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services'], full: true },
-    { key: 'target_sectors', label: 'Looking for sectors (buyers)', aliases: ['targetsectors', 'interestsectors', 'acquisitionsectors', 'focussectors', 'focus'] },
-    { key: 'target_countries', label: 'Looking for countries (buyers)', aliases: ['targetcountries', 'targetgeography', 'focuscountries', 'geographicfocus', 'focusgeography'] },
-    { key: 'min_revenue', label: 'Min target revenue (m)', aliases: ['minrevenue', 'mintargetrevenue', 'minsize'], num: true },
-    { key: 'max_revenue', label: 'Max target revenue (m)', aliases: ['maxrevenue', 'maxtargetrevenue', 'maxsize'], num: true },
-    { key: 'contact_name', label: 'Contact name', aliases: ['contact', 'contactname', 'contactperson', 'fullname', 'naam', 'person'] },
-    { key: 'contact_title', label: 'Contact title', aliases: ['title', 'jobtitle', 'function', 'functie', 'position', 'contacttitle'] },
-    { key: 'email', label: 'Email', aliases: ['email', 'emailaddress', 'mail', 'contactemail', 'e-mail'] },
-    { key: 'phone', label: 'Phone', aliases: ['phone', 'telephone', 'tel', 'telefoon', 'mobile'] },
-    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain'] },
-    { key: 'status', label: 'Status', aliases: ['status', 'stage'] },
-    { key: 'notes', label: 'Notes', aliases: ['notes', 'notities', 'comments', 'remarks'], full: true, long: true },
+    { key: 'revenue', label: 'Revenue', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
+    { key: 'ebitda', label: 'EBITDA', aliases: ['ebitda'], num: true, money: true },
+    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees'], num: true },
+    { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar'] },
+    { key: 'portfolio', label: 'Portfolio companies', aliases: ['portfolio', 'portfoliocompanies'] },
+    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment'], long: true },
+    { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services'] },
+    { key: 'target_sectors', label: 'Looking for sectors', aliases: ['targetsectors', 'interestsectors', 'acquisitionsectors', 'focussectors', 'focus', 'investmentfocus', 'lookingforsectors'] },
+    { key: 'target_countries', label: 'Looking for countries', aliases: ['targetcountries', 'lookingforcountries', 'targetgeography', 'focuscountries', 'geographicfocus', 'focusgeography'] },
+    { key: 'min_revenue', label: 'Min target revenue', aliases: ['minrevenue', 'mintargetrevenue', 'minsize'], num: true, money: true },
+    { key: 'max_revenue', label: 'Max target revenue', aliases: ['maxrevenue', 'maxtargetrevenue', 'maxsize'], num: true, money: true },
+    { key: 'notes', label: 'Notes', aliases: ['notes', 'notities'], long: true },
   ];
-  const NUM_FIELDS = new Set(FIELDS.filter(f => f.num).map(f => f.key));
+  const CONTACT_FIELDS = [
+    { key: 'name', label: 'name', aliases: ['contactname', 'contact', 'contactperson', 'fullname', 'person', 'naam', 'contactpersoon'] },
+    { key: 'title', label: 'function', aliases: ['function', 'title', 'jobtitle', 'functie', 'position', 'contacttitle', 'contactfunction'] },
+    { key: 'email', label: 'email', aliases: ['email', 'emailaddress', 'mail', 'contactemail', 'emailadres'] },
+    { key: 'phone', label: 'phone', aliases: ['phone', 'telephone', 'tel', 'telefoon', 'mobile', 'phonenumber'] },
+  ];
+  // Per-project information (a buyer can appear in many projects with a different status each time).
+  const PROJECT_FIELDS = [
+    { key: 'status', label: 'Status', aliases: ['status', 'stage', 'processstatus'] },
+    { key: 'last_contact', label: 'Date of last contact', aliases: ['dateoflastcontact', 'lastcontact', 'lastcontactdate', 'date'], date: true },
+    { key: 'log', label: 'Log', aliases: ['log', 'history', 'activitylog'] },
+    { key: 'responsible', label: 'Responsible', aliases: ['responsible', 'coverage', 'dealteam', 'accountowner'] },
+    { key: 'tier', label: 'Tier / priority', aliases: ['tier', 'priority', 'prio'] },
+    { key: 'remarks', label: 'Remarks', aliases: ['remarks', 'comment', 'comments', 'internalcomment', 'opmerkingen'], multi: true },
+  ];
+  const MAX_CONTACTS = 5;
+  // Fuzzy "contains" matching for headers like "Status Lakeside" or "Date of last contact/note".
+  const CONTAINS = [['lastcontact', 'project.last_contact'], ['status', 'project.status'], ['comment', 'project.remarks'], ['remark', 'project.remarks'], ['email', 'contact1.email'], ['website', 'company.website'], ['revenue', 'company.revenue'], ['ebitda', 'company.ebitda'], ['employee', 'company.employees']];
+
+  const TARGET_OPTIONS = [
+    ...COMPANY_FIELDS.map(f => ({ value: 'company.' + f.key, label: f.label, group: 'Company' })),
+    ...Array.from({ length: MAX_CONTACTS }, (_, i) => CONTACT_FIELDS.map(f => ({ value: `contact${i + 1}.${f.key}`, label: `Contact ${i + 1} ${f.label}`, group: 'Contacts' }))).flat(),
+    ...PROJECT_FIELDS.map(f => ({ value: 'project.' + f.key, label: f.label, group: 'Project' })),
+    { value: 'extra', label: 'Keep as extra info', group: 'Other' },
+    { value: 'ignore', label: 'Ignore', group: 'Other' },
+  ];
+  const MULTI_TARGETS = new Set(['extra', 'ignore', 'project.remarks']);
+
   const STATUSES = ['New', 'Contacted', 'Interested', 'NDA', 'Declined', 'Closed'];
 
   const REGIONS = {
     Benelux: ['netherlands', 'nederland', 'the netherlands', 'nl', 'belgium', 'belgie', 'belgië', 'be', 'luxembourg', 'lu'],
-    DACH: ['germany', 'duitsland', 'deutschland', 'de', 'austria', 'at', 'switzerland', 'ch'],
+    DACH: ['germany', 'duitsland', 'deutschland', 'de', 'austria', 'at', 'oostenrijk', 'switzerland', 'ch', 'zwitserland'],
     'UK & Ireland': ['united kingdom', 'uk', 'england', 'scotland', 'wales', 'gb', 'great britain', 'ireland', 'ie'],
     Nordics: ['sweden', 'se', 'norway', 'no', 'denmark', 'dk', 'finland', 'fi', 'iceland'],
     France: ['france', 'frankrijk', 'fr'],
@@ -42,31 +67,122 @@ const Engine = (() => {
   for (const [region, list] of Object.entries(REGIONS)) list.forEach(c => (COUNTRY_TO_REGION[c] = region));
   const EUROPE = new Set(['Benelux', 'DACH', 'UK & Ireland', 'Nordics', 'France', 'Southern Europe', 'CEE']);
 
-  const STOPWORDS = new Set('a an and or the of for in on to with by from at as is are be we our their its it this that b2b b2c company companies group holding bv nv ltd gmbh inc llc services solutions provider leading based international'.split(' '));
+  const STOPWORDS = new Set('a an and or the of for in on to with by from at as is are be we our their its it this that b2b b2c company companies group holding bv nv ltd gmbh inc llc services solutions provider leading based international also own e.g. etc'.split(' '));
+  // Removed when comparing names for duplicates: "x-tention Unternehmensgruppe" = "X-Tention GmbH".
+  const LEGAL_WORDS = new Set('bv b.v nv n.v gmbh ag sa sas sarl srl spa ltd limited plc inc incorporated llc lp llp co kg ohg se ab as oy aps bvba vof cv holding holdings group groep gruppe unternehmensgruppe the de and'.split(' '));
 
   const DEFAULT_WEIGHTS = { sector: 35, geography: 15, size: 20, keywords: 20, role: 10 };
   const WEIGHT_LABELS = { sector: 'Sector', geography: 'Geography', size: 'Size fit', keywords: 'Keywords', role: 'Buyer/target role' };
 
-  const norm = s => String(s ?? '').trim();
+  const norm = s => String(s ?? '').replace(/\s+/g, ' ').trim();
   const lower = s => norm(s).toLowerCase();
-  const headerKey = h => lower(h).replace(/[^a-z0-9-]/g, '').replace(/-/g, '');
+  const headerKey = h => lower(h).replace(/[^a-z0-9]/g, '');
+  const EMPTYISH = /^(x|\.|-|–|—|n\/?a|na|tbd|\?|0)$/i;
+  const clean = v => (v == null ? '' : EMPTYISH.test(norm(v)) ? '' : norm(v));
+  const EMAIL_RE = /[A-Z0-9._%+'-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 
-  const aliasMap = {};
-  FIELDS.forEach(f => [f.key.replace(/_/g, ''), ...f.aliases].forEach(a => (aliasMap[a.replace(/-/g, '')] = f.key)));
+  const exactAlias = {};
+  COMPANY_FIELDS.forEach(f => f.aliases.forEach(a => (exactAlias[a] ??= 'company.' + f.key)));
+  PROJECT_FIELDS.forEach(f => f.aliases.forEach(a => (exactAlias[a] ??= 'project.' + f.key)));
+  const contactAlias = {};
+  CONTACT_FIELDS.forEach(f => f.aliases.forEach(a => (contactAlias[a] = f.key)));
 
-  // "€12,5m" -> 12.5, "1.2bn" -> 1200, "850k" -> 0.85 (all in millions)
-  function parseNumber(v) {
+  // Best guess for one header, ignoring which targets are already taken.
+  function guessTarget(header) {
+    const hk = headerKey(header);
+    if (!hk) return 'ignore';
+    if (exactAlias[hk]) return exactAlias[hk];
+    if (contactAlias[hk]) return 'contact1.' + contactAlias[hk];
+    const m = hk.match(/^([a-z]+?)(\d)$/);
+    if (m && contactAlias[m[1]] && +m[2] >= 1 && +m[2] <= MAX_CONTACTS) return `contact${m[2]}.${contactAlias[m[1]]}`;
+    if (m && contactAlias['contact' + m[1]]) return `contact${m[2]}.${contactAlias['contact' + m[1]]}`;
+    for (const [frag, t] of CONTAINS) if (hk.includes(frag)) return t;
+    return 'extra';
+  }
+
+  // Maps every header of a sheet to a target. Exact matches claim a field before fuzzy ones;
+  // a second column for the same field becomes "extra".
+  function mapHeaders(headers, memory = {}) {
+    const out = headers.map(() => null), taken = new Set();
+    const claim = (i, t) => {
+      if (!MULTI_TARGETS.has(t) && taken.has(t)) return false;
+      taken.add(t); out[i] = t; return true;
+    };
+    headers.forEach((h, i) => { const mem = memory[headerKey(h)]; if (mem) claim(i, mem); });
+    headers.forEach((h, i) => {
+      if (out[i]) return;
+      const t = guessTarget(h), hk = headerKey(h);
+      const exact = exactAlias[hk] || contactAlias[hk] || /\d$/.test(hk);
+      if (exact && t !== 'extra') claim(i, t);
+    });
+    headers.forEach((h, i) => { if (!out[i]) claim(i, guessTarget(h)) || claim(i, 'extra'); });
+    return out;
+  }
+
+  // Picks the row that looks most like a header within the first 25 rows.
+  function detectHeaderRow(rows) {
+    let best = 0, bestScore = -1;
+    rows.slice(0, 25).forEach((r, i) => {
+      const cells = r.filter(v => typeof v === 'string' && v.trim());
+      const t = cells.map(guessTarget);
+      const score = t.filter(x => x !== 'extra' && x !== 'ignore').length + (t.includes('company.name') ? 3 : 0);
+      if (score > bestScore) { best = i; bestScore = score; }
+    });
+    return best;
+  }
+
+  // Looks for "In EUR k" style hints above the header.
+  function detectUnit(rows, headerRow) {
+    const text = rows.slice(0, headerRow + 1).flat().join(' ').toLowerCase();
+    if (/(eur|€|usd|\$)\s*'?k\b|\bin\s*k\b|thousand|'000|x\s*1[.,]?000\b|\(k\)|k€/.test(text)) return 'k';
+    return 'm';
+  }
+
+  function guessRoleFromSheet(name) {
+    const s = lower(name);
+    if (/financ|invest|private equity|\bpe\b|fund|sponsor/.test(s)) return 'Investor';
+    if (/strateg|buyer|corporate|acquir/.test(s)) return 'Buyer';
+    if (/target|seller/.test(s)) return 'Target';
+    return '';
+  }
+  const SKIP_SHEETS = /dashboard|graveyard|\bold\b|source|process|cache|^>>|>>$|readme|instruction|lookup|list of values/i;
+
+  function guessProject(filename) {
+    const m = String(filename).match(/project[\s_-]+([a-z0-9]+)/i);
+    return m ? m[1][0].toUpperCase() + m[1].slice(1) : String(filename).replace(/\.[^.]+$/, '');
+  }
+
+  // "€12,5m" -> 12.5, "1.2bn" -> 1200, "850k" -> 0.85. Plain numbers are multiplied by `unitMult`.
+  function parseNumber(v, unitMult = 1) {
     if (v === null || v === undefined || v === '') return null;
-    if (typeof v === 'number') return isFinite(v) ? v : null;
-    let s = lower(v).replace(/[€$£\s]|eur|usd|gbp/g, '');
-    let mult = 1;
+    if (typeof v === 'number') return isFinite(v) ? v * unitMult : null;
+    let s = lower(v).replace(/^(circa|approx\.?|ca\.?|c\.|~|>|<|\+\/-)\s*/, '').replace(/[€$£\s]|eur|usd|gbp/g, '');
+    if (EMPTYISH.test(s) || !/\d/.test(s)) return null;
+    let mult = unitMult;
     if (/(bn|b)$/.test(s)) { mult = 1000; s = s.replace(/(bn|b)$/, ''); }
-    else if (/(mln|mio|mm|m)$/.test(s)) { s = s.replace(/(mln|mio|mm|m)$/, ''); }
+    else if (/(mln|mio|mm|m)$/.test(s)) { mult = 1; s = s.replace(/(mln|mio|mm|m)$/, ''); }
     else if (/k$/.test(s)) { mult = 0.001; s = s.replace(/k$/, ''); }
-    if (s.includes(',') && !s.includes('.')) s = /,\d{3}$/.test(s) ? s.replace(/,/g, '') : s.replace(',', '.');
+    s = s.replace(/[^0-9.,-]/g, '');
+    if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.'); // 1.250.000,5
+    else if (s.includes(',') && !s.includes('.')) s = /^\d{1,3}(,\d{3})+$/.test(s) ? s.replace(/,/g, '') : s.replace(',', '.');
     else s = s.replace(/,/g, '');
     const n = parseFloat(s);
-    return isNaN(n) ? null : n * mult;
+    return isNaN(n) ? null : Math.round(n * mult * 1000) / 1000;
+  }
+
+  // Excel serial dates (46316) and common text dates -> "2026-10-21".
+  function parseDate(v) {
+    if (v === '' || v == null) return '';
+    if (typeof v === 'number' && v > 20000 && v < 80000) {
+      const d = new Date(Math.round((v - 25569) * 86400000));
+      return d.toISOString().slice(0, 10);
+    }
+    const s = norm(v);
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = s.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return s;
   }
 
   const splitList = s => norm(s).split(/[;,|/]+/).map(lower).filter(Boolean);
@@ -75,8 +191,8 @@ const Engine = (() => {
     const s = lower(r);
     if (!s) return '';
     if (/target|seller|sell|verkoop|for sale|mandate/.test(s)) return 'Target';
-    if (/invest|private equity|pe\b|fund|family office|financial/.test(s)) return 'Investor';
-    if (/buyer|strategic|acquir|koper/.test(s)) return 'Buyer';
+    if (/invest|private equity|\bpe\b|fund|family office|financial|sponsor/.test(s)) return 'Investor';
+    if (/buyer|strategic|acquir|koper|corporate/.test(s)) return 'Buyer';
     return norm(r);
   }
 
@@ -85,28 +201,117 @@ const Engine = (() => {
     return COUNTRY_TO_REGION[lower(c.country)] || '';
   }
 
-  // Turns a raw spreadsheet row into a company record.
-  function rowToCompany(row) {
-    const c = {};
-    for (const [h, v] of Object.entries(row)) {
-      const key = aliasMap[headerKey(h)];
-      if (!key || c[key]) continue;
-      c[key] = NUM_FIELDS.has(key) ? parseNumber(v) : norm(v);
-    }
-    // Spreadsheets with "First name" + "Last name" columns
-    if (!c.contact_name) {
-      const get = re => Object.entries(row).find(([h]) => re.test(headerKey(h)))?.[1];
-      const full = [get(/^(firstname|voornaam)$/), get(/^(lastname|surname|achternaam)$/)].filter(Boolean).join(' ');
-      if (full) c.contact_name = full;
-    }
-    c.role = normaliseRole(c.role);
-    c.email = lower(c.email);
-    c.status = c.status || 'New';
-    return c;
+  // Turns one spreadsheet row into { company, contacts, project }.
+  function parseRow(row, headers, targets, opts = {}) {
+    const unitMult = opts.unit === 'k' ? 0.001 : 1;
+    const company = {}, contacts = [], project = { project: opts.project || '', source: opts.source || '', remarks: [], extra: {} };
+    targets.forEach((t, i) => {
+      const raw = row[i];
+      if (!t || t === 'ignore' || raw === '' || raw == null) return;
+      const [scope, key] = t.split('.');
+      if (scope === 'company') {
+        const f = COMPANY_FIELDS.find(x => x.key === key);
+        const v = f.num ? parseNumber(raw, f.money ? unitMult : 1) : clean(raw);
+        if (v !== '' && v != null && company[key] == null) company[key] = v;
+      } else if (scope.startsWith('contact')) {
+        const idx = +scope.slice(7) - 1;
+        const v = clean(raw);
+        if (!v) return;
+        contacts[idx] ??= {};
+        if (key === 'email') {
+          const m = v.match(EMAIL_RE);
+          if (m) contacts[idx].email = m[0].toLowerCase();
+          else contacts[idx].note = v;
+        } else contacts[idx][key] = v;
+      } else if (scope === 'project') {
+        if (key === 'remarks') { const v = clean(raw); if (v) project.remarks.push(`${norm(headers[i])}: ${v}`); }
+        else if (key === 'last_contact') project.last_contact = parseDate(raw);
+        else project[key] = norm(raw);
+      } else if (t === 'extra') {
+        const h = norm(headers[i]) || `Column ${i + 1}`;
+        const v = typeof raw === 'number' && /date/i.test(h) ? parseDate(raw) : norm(raw);
+        if (v && !EMPTYISH.test(v)) project.extra[h] = v;
+      }
+    });
+    company.role = normaliseRole(company.role) || opts.role || '';
+    project.remarks = project.remarks.join(' | ');
+    return { company, contacts: contacts.filter(c => c && (c.name || c.email)), project };
   }
 
+  // ---------- Duplicates ----------
+  function normName(name) {
+    const s = lower(name)
+      .normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\(.*?\)/g, ' ')
+      .replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, ' ');
+    const words = s.split(' ').filter(w => w && !LEGAL_WORDS.has(w));
+    return words.join(' ') || s.trim();
+  }
+  function domainOf(url) {
+    const s = lower(url);
+    if (!s) return '';
+    try { return new URL(/^https?:/.test(s) ? s : 'https://' + s).hostname.replace(/^www\d?\./, ''); } catch { return ''; }
+  }
+
+  // Exact: same website domain or same cleaned name. Possible: one name is the start of the other.
+  function findDuplicates(company, list) {
+    const n = normName(company.name), d = domainOf(company.website);
+    const exact = [], possible = [];
+    for (const c of list) {
+      if (c === company) continue;
+      const cn = c._norm ?? normName(c.name), cd = c._domain ?? domainOf(c.website);
+      if ((d && cd && d === cd) || (n && n === cn)) exact.push(c);
+      else if (n.length >= 4 && cn.length >= 4 && (cn.startsWith(n + ' ') || n.startsWith(cn + ' ') || n.replace(/ /g, '') === cn.replace(/ /g, ''))) possible.push(c);
+    }
+    return { exact, possible };
+  }
+
+  const isBlank = v => v === '' || v == null;
+
+  // Merges parsed row data into an existing company. Blank fields are filled; existing values win.
+  function mergeInto(target, { company, contacts = [], project }) {
+    for (const [k, v] of Object.entries(company)) if (!isBlank(v) && isBlank(target[k])) target[k] = v;
+    target.contacts ??= [];
+    for (const ct of contacts) {
+      const same = target.contacts.find(x => (ct.email && x.email === ct.email) || (!ct.email || !x.email) && ct.name && lower(x.name) === lower(ct.name));
+      if (same) { for (const [k, v] of Object.entries(ct)) if (!isBlank(v) && isBlank(same[k])) same[k] = v; }
+      else target.contacts.push({ ...ct });
+    }
+    if (project && (project.project || project.status || project.log || Object.keys(project.extra || {}).length)) {
+      target.projects ??= [];
+      const p = target.projects.find(x => x.project === project.project);
+      if (p) {
+        // The newest upload of the same project wins for status fields.
+        for (const [k, v] of Object.entries(project)) if (k !== 'extra' && !isBlank(v)) p[k] = v;
+        p.extra = { ...(p.extra || {}), ...(project.extra || {}) };
+        if (project.source && !String(p.source).includes(project.source)) p.source = [p.source, project.source].filter(Boolean).join('; ');
+      } else target.projects.push({ ...project });
+    }
+    if (project?.source) {
+      target.sources ??= [];
+      if (!target.sources.includes(project.source)) target.sources.push(project.source);
+    }
+    target._norm = normName(target.name);
+    target._domain = domainOf(target.website);
+    return target;
+  }
+
+  // Merges company `b` into `a` (manual merge).
+  function mergeCompanies(a, b) {
+    mergeInto(a, { company: Object.fromEntries(Object.entries(b).filter(([k]) => !['id', 'contacts', 'projects', 'sources', '_norm', '_domain'].includes(k))), contacts: b.contacts || [] });
+    for (const p of b.projects || []) mergeInto(a, { company: {}, project: p });
+    a.sources ??= [];
+    for (const s of b.sources || []) if (!a.sources.includes(s)) a.sources.push(s);
+    return a;
+  }
+
+  // ---------- Matching ----------
+  const primaryContact = c => (c.contacts || []).find(x => x.email) || null;
+  const hasEmail = c => !!primaryContact(c);
+
   function tokens(c) {
-    const text = [c.description, c.keywords, c.subsector, c.sector].join(' ').toLowerCase();
+    const text = [c.description, c.keywords, c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
     return new Set(text.split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t)));
   }
 
@@ -129,7 +334,7 @@ const Engine = (() => {
     const dc = lower(deal.country), cc = lower(cand.country);
     const dr = regionOf(deal), cr = regionOf(cand);
     const candWants = splitList(cand.target_countries);
-    if (dc && candWants.some(w => w === dc || lower(w) === lower(dr) || (w === 'europe' && EUROPE.has(dr)) || w === 'global')) return [1, `Targets ${deal.country}`];
+    if (dc && candWants.some(w => w === dc || w === lower(dr) || (w === 'europe' && EUROPE.has(dr)) || w === 'global')) return [1, `Targets ${deal.country}`];
     if (dc && dc === cc) return [1, `Same country: ${cand.country}`];
     if (dr && dr === cr) return [0.7, `Same region: ${cr}`];
     if (EUROPE.has(dr) && EUROPE.has(cr)) return [0.4, 'Both in Europe'];
@@ -191,11 +396,7 @@ const Engine = (() => {
         };
         let sum = 0;
         for (const [k, [v]] of Object.entries(parts)) sum += v * Number(weights[k] || 0);
-        return {
-          company: c,
-          score: Math.round((sum / totalW) * 100),
-          reasons: Object.values(parts).map(p => p[1]).filter(Boolean),
-        };
+        return { company: c, score: Math.round((sum / totalW) * 100), reasons: Object.values(parts).map(p => p[1]).filter(Boolean) };
       })
       .sort((a, b) => b.score - a.score);
   }
@@ -205,11 +406,11 @@ const Engine = (() => {
     return Number(n).toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 1 : 0 });
   }
 
-  // Fills {{placeholders}} in a template.
-  function render(tpl, deal, cand, extra = {}) {
-    const first = norm(cand.contact_name).split(/\s+/)[0] || '';
+  // Fills {{placeholders}} in a template for one contact at a candidate company.
+  function render(tpl, deal, cand, contact = {}, extra = {}) {
+    const first = norm(contact?.name).replace(/^(dr|mr|mrs|ms|prof|ir|drs|ing)\.?\s+/i, '').split(/\s+/)[0] || '';
     const vars = {
-      first_name: first || 'Sir/Madam', contact_name: cand.contact_name || '', contact_title: cand.contact_title || '',
+      first_name: first || 'Sir/Madam', contact_name: contact?.name || '', contact_title: contact?.title || '',
       company: cand.name || '', sector: cand.sector || '', country: cand.country || '',
       deal_name: deal.name || '', deal_sector: deal.sector || '', deal_subsector: deal.subsector || '', deal_country: deal.country || '',
       deal_revenue: deal.revenue != null ? `€${fmt(deal.revenue)}m` : '', deal_ebitda: deal.ebitda != null ? `€${fmt(deal.ebitda)}m` : '',
@@ -218,8 +419,10 @@ const Engine = (() => {
     return String(tpl).replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k) => (k in vars ? vars[k] : m));
   }
 
-  const fieldFor = h => aliasMap[headerKey(h)];
-
-  return { FIELDS, STATUSES, fieldFor, DEFAULT_WEIGHTS, WEIGHT_LABELS, rowToCompany, parseNumber, match, render, fmt, regionOf, normaliseRole };
+  return {
+    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
+    headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
+    normName, domainOf, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+  };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

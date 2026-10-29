@@ -32,9 +32,21 @@ Your IT admin may need to do this step or approve it.
 
 Emails are sent as **you**, from your own mailbox, and appear in your Sent Items.
 
-## 3. Upload format
+## 3. Importing buyer lists
 
-Click **Download template** in the app for an example. Column names are flexible. For example, `Company`, `Industry`, `Turnover`, `E-mail`, `Omzet` and `Land` are all recognised. Amounts are in **millions** (`€12,5m`, `12.5`, `850k` and `1.2bn` all work).
+Click **Import Excel / CSV**. You can select several files at once. For each file:
+
+1. **Pick the sheets** to import. Dashboards, old sheets and graveyards are unticked by default. The project name is read from the file name, e.g. "Project Lakeside" becomes `Lakeside`.
+2. For each sheet, check the result:
+   - **Header row**: found automatically, even with title rows above it.
+   - **Amounts**: EUR millions or thousands. "In EUR k" above the header is detected.
+   - **Columns**: each column is matched to a field. "Contact Name 2", "Function 2" and "E-mail 2" become the company's second contact. Status, log, tier, responsible and comments are kept as **project history**. Anything else is kept as extra info. Your corrections are remembered for the next upload.
+   - **Rows**: untick the rows you don't want. The filter box lets you deselect, for example, all rows marked "oud".
+   - **Duplicates**: a company that already exists (same website, or same name ignoring GmbH/BV/Group etc.) is **merged**. Empty fields are filled in, new contacts are added, and project status is updated. Near-matches are flagged in orange so you can choose.
+
+Use **Find duplicates** on the Companies tab to clean up afterwards. You can also merge two companies by hand in the company dialog.
+
+Click **Download template** for a clean example layout. Column names are flexible. For example, `Company`, `Investor`, `Category`, `Turnover`, `E-mail`, `Omzet` and `Land` are all recognised. Amounts like `€12,5m`, `850k` and `1.2bn` all work.
 
 | Column | Used for |
 |---|---|
@@ -44,9 +56,8 @@ Click **Download template** in the app for an example. Column names are flexible
 | `revenue`, `ebitda`, `employees` | size fit |
 | `description`, `keywords` | keyword similarity |
 | `target_sectors`, `target_countries`, `min_revenue`, `max_revenue` | **buyer criteria**: strongest signal when filled in (separate items with `;`) |
-| `contact_name`, `contact_title`, `email`, `phone`, `website` | email and CRM details |
-
-Uploading the same company (same name and email) again updates its details instead of creating a duplicate.
+| `Contact name`, `Function`, `E-mail`, `Phone` (+ ` 2`, ` 3` …) | contacts that get the emails |
+| `Status`, `Date of last contact`, `Log`, `Tier`, `Responsible`, `Remarks` | project history |
 
 ## 4. How the score works
 

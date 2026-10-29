@@ -25,21 +25,22 @@
     <!-- COMPANIES -->
     <section id="tab-companies" class="panel active">
       <div class="toolbar">
-        <label class="btn primary">Upload CSV / Excel
-          <input type="file" id="upload" accept=".csv,.xlsx,.xls" hidden>
+        <label class="btn primary">Import Excel / CSV
+          <input type="file" id="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden>
         </label>
         <button class="btn" id="addCompany">+ Add company</button>
+        <button class="btn" id="findDuplicates">Find duplicates</button>
         <button class="btn" id="downloadTemplate">Download template</button>
-        <input type="search" id="search" placeholder="Search name, sector, country, email…">
+        <input type="search" id="search" placeholder="Search name, sector, country, contact, email…">
         <select id="filterRole"><option value="">All roles</option></select>
+        <select id="filterProject"><option value="">All projects</option></select>
         <span id="companyCount" class="muted"></span>
       </div>
       <div class="table-wrap">
         <table id="companyTable">
           <thead><tr>
             <th>Name</th><th>Role</th><th>Sector</th><th>Country</th>
-            <th class="num">Revenue (m)</th><th class="num">EBITDA (m)</th>
-            <th>Contact</th><th>Email</th><th>Status</th><th></th>
+            <th class="num">Revenue (m)</th><th>Contacts</th><th>Projects</th><th></th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -101,7 +102,7 @@
           </div>
           <label>Subject <input id="subject"></label>
           <label>Body <textarea id="body" rows="14"></textarea></label>
-          <div class="muted small">Placeholders: <code>{{first_name}}</code> <code>{{contact_name}}</code> <code>{{company}}</code> <code>{{sector}}</code> <code>{{country}}</code> <code>{{deal_name}}</code> <code>{{deal_sector}}</code> <code>{{deal_country}}</code> <code>{{deal_revenue}}</code> <code>{{deal_description}}</code> <code>{{sender_name}}</code></div>
+          <div class="muted small">Placeholders: <code>{{first_name}}</code> <code>{{contact_name}}</code> <code>{{contact_title}}</code> <code>{{company}}</code> <code>{{sector}}</code> <code>{{country}}</code> <code>{{deal_name}}</code> <code>{{deal_sector}}</code> <code>{{deal_country}}</code> <code>{{deal_revenue}}</code> <code>{{deal_description}}</code> <code>{{sender_name}}</code></div>
           <label>CC (optional) <input id="cc" placeholder="colleague@33equity.eu"></label>
           <div class="toolbar">
             <label class="row"><input type="radio" name="sendMode" value="draft" checked> Save as Outlook drafts</label>
@@ -149,6 +150,7 @@
         <h2>Data</h2>
         <p class="muted small">Your data is stored in this browser only. Back it up regularly.</p>
         <button class="btn" id="backup">Download backup (JSON)</button>
+        <button class="btn" id="exportAll">Export all companies (Excel)</button>
         <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
         <button class="btn danger" id="wipe">Delete all companies</button>
       </div>
@@ -159,7 +161,7 @@
   <dialog id="editDialog">
     <form method="dialog" id="editForm">
       <h2 id="editTitle">Company</h2>
-      <div class="form-grid" id="editFields"></div>
+      <div id="editFields"></div>
       <div class="toolbar">
         <span class="spacer"></span>
         <button class="btn" value="cancel">Cancel</button>
@@ -167,6 +169,9 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Import wizard -->
+  <dialog id="importDialog" class="wide"><div id="importBody"></div></dialog>
 
   <div id="toast"></div>
   <script src="engine.js"></script>
