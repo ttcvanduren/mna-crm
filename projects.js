@@ -3,6 +3,18 @@
 const STAGE_COLORS = { 'Not approached': '#98a2b3', Approached: '#1d4ed8', Engaged: '#067647', Passed: '#b42318', Other: '#b54708' };
 const STAGE_CHIP = { 'Not approached': '', Approached: 'blue', Engaged: 'green', Passed: 'red', Other: 'amber' };
 const PROJECT_STATUSES = ['Active', 'On hold', 'Closed – deal', 'Closed – no deal'];
+const TARGET_FIELDS = [
+  ['codename', 'Codename in emails', 'e.g. a German input-management software company'],
+  ['website', 'Website', 'inovoo.com'],
+  ['sector', 'Sector', 'e.g. Input management / IDP'],
+  ['subsector', 'Sub-sector', 'e.g. AI document capture for insurers'],
+  ['country', 'Country', 'Germany'],
+  ['revenue', 'Revenue (EUR m)', 'e.g. 8.5'],
+  ['ebitda', 'EBITDA (EUR m)', 'e.g. 1.6'],
+  ['employees', 'Employees', 'e.g. 60'],
+  ['keywords', 'Keywords for matching', 'e.g. input management; IDP; OCR; insurance; health insurers; document AI'],
+  ['description', 'Description', 'What the company does, customers, products, geography, why it is attractive'],
+];
 
 const saveProjects = () => saveShared('projects', state.projects);
 
@@ -100,12 +112,19 @@ function renderProjectDetail(name) {
   const resps = [...new Set(all.map(m => norm(m.p.responsible)).filter(r => /^[A-Za-z]{2,4}$/.test(r)))].sort();
   const opt = (vals, cur, all) => `<option value="">${all}</option>` + vals.map(v => `<option ${String(v) === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
 
-  $('#projectsView').innerHTML = `<div class="page-head">
+  const tab = state.projectTab || 'overview';
+  const due = followUpsDue(name).length;
+  const tabs = [['overview', 'Overview'], ['buyers', `Buyers (${all.length})`], ['board', 'Pipeline board'], ['find', '✦ Find buyers'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]];
+  const head = `<div class="page-head">
       <div><button class="link small" id="backProjects">← All projects</button>
         <h1>${esc(proj.name)} <span class="chip ${proj.status === 'Active' ? 'green' : ''}" style="vertical-align:middle">${esc(proj.status)}</span></h1>
-        <div class="muted">${esc(proj.client || 'No client set')}${proj.description ? ' · ' + esc(proj.description) : ''}</div></div>
-      <div class="actions"><button class="btn" id="editProject">Edit project</button><button class="btn" id="exportProject">Export Excel</button><button class="btn primary" id="projResearch">✦ Export for research</button></div>
+        <div class="muted">${esc(proj.client || 'No client set')}${proj.target?.sector ? ' · ' + esc(proj.target.sector) : ''}${proj.description ? ' · ' + esc(proj.description) : ''}</div></div>
+      <div class="actions"><button class="btn" id="editProject">Edit project & deal profile</button><button class="btn" id="exportProject">Export Excel</button></div>
     </div>
+    <div class="page-tabs">${tabs.map(([k, l]) => `<button data-ptab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  if (tab !== 'buyers') { $('#projectsView').innerHTML = head + `<div id="projectBody"></div>`; return renderProjectTab(proj, tab); }
+
+  $('#projectsView').innerHTML = head + `
     <div class="funnel">${Engine.STAGE_GROUPS.filter(g => g !== 'Other' || s.groups.Other).map(g => `<button class="funnel-step ${pf.group === g ? 'on' : ''}" data-group="${g}" style="--c:${STAGE_COLORS[g]}">
         <b>${s.groups[g]}</b><span>${g}</span><i>${s.total ? Math.round((s.groups[g] / s.total) * 100) : 0}%</i></button>`).join('')}</div>
     <div class="filters">
@@ -114,6 +133,10 @@ function renderProjectDetail(name) {
       <select id="pfResp">${opt(resps, pf.resp, 'Everyone')}</select>
       ${pf.group || pf.tier || pf.resp || pf.q ? '<button class="btn ghost sm" id="pfClear">Clear filters</button>' : ''}
       <span class="muted small">${rows.length} of ${all.length} buyers</span>
+      <span class="spacer"></span>
+      <select id="pfMove"><option value="">Move selected to…</option>${Engine.BOARD_STAGES.map(s => `<option>${s}</option>`).join('')}</select>
+      <button class="btn" id="projResearch">✦ Export for research</button>
+      <button class="btn primary" id="pfEmail">✉ Email selected</button>
     </div>
     <div class="table-wrap">
       <table class="data" id="projectTable"><thead><tr>
@@ -149,9 +172,15 @@ function companyCell(c) {
 $('#projectsView').addEventListener('click', e => {
   if (e.target.closest('a')) return;
   const card = e.target.closest('[data-project]');
-  if (card) { state.projectView = card.dataset.project; Object.assign(pf, { q: '', group: '', tier: '', resp: '' }); return renderProjects(); }
+  if (card) { state.projectView = card.dataset.project; state.projectTab = 'overview'; Object.assign(pf, { q: '', group: '', tier: '', resp: '' }); return renderProjects(); }
   const id = e.target.id;
+  const ptab = e.target.closest('[data-ptab]');
+  if (ptab) { state.projectTab = ptab.dataset.ptab; return renderProjects(); }
   if (id === 'backProjects') { state.projectView = null; return renderProjects(); }
+  if (id === 'pfEmail') {
+    const ids = members(state.projectView).map(m => m.c.id).filter(i => state.picked.has(i));
+    return emailFromProject(state.projectView, ids);
+  }
   if (id === 'newProject') return openProjectDialog(null);
   if (id === 'editProject') return openProjectDialog(state.projectView);
   if (id === 'projImport') return $('#upload').click();
@@ -176,6 +205,13 @@ $('#projectsView').addEventListener('click', e => {
   if (tr) openDrawer(tr.dataset.id, 'projects');
 });
 $('#projectsView').addEventListener('change', e => {
+  if (e.target.id === 'pfMove' && e.target.value) {
+    const ids = members(state.projectView).map(m => m.c.id).filter(id => state.picked.has(id));
+    if (!ids.length) { e.target.value = ''; return toast('Select buyers first.'); }
+    ids.forEach(id => moveStage(byId(id), state.projectView, e.target.value));
+    toast(`${ids.length} buyers moved to ${e.target.value}.`);
+    return renderProjects();
+  }
   if (e.target.id === 'pfTier') { pf.tier = e.target.value; renderProjects(); }
   if (e.target.id === 'pfResp') { pf.resp = e.target.value; renderProjects(); }
 });
@@ -198,7 +234,14 @@ function openProjectDialog(name) {
       <label>Client <input name="client" value="${esc(p.client)}" placeholder="e.g. Teavaro"></label>
       <label>Status <select name="status">${PROJECT_STATUSES.map(s => `<option ${s === p.status ? 'selected' : ''}>${s}</option>`).join('')}</select></label>
       <label>Sector <input name="sector" value="${esc(p.sector || '')}" placeholder="e.g. Customer data platform"></label>
-      <label class="full">Description <textarea name="description" rows="3">${esc(p.description || '')}</textarea></label>
+      <label class="full">Project note <input name="description" value="${esc(p.description || '')}" placeholder="e.g. Sell-side, sovereign document editor, launched Sep-2026"></label>
+    </div>
+    <h3>Deal profile: the company you're selling</h3>
+    <p class="muted small">Used by <b>Find buyers</b>, the valuation and the email placeholders ({{deal_sector}}, {{deal_country}}, {{deal_revenue}}…).</p>
+    <div class="form-grid">
+      ${TARGET_FIELDS.map(([k, label, ph]) => `<label class="${k === 'description' || k === 'keywords' ? 'full' : ''}">${label}${k === 'description'
+        ? `<textarea name="t_${k}" rows="4" placeholder="${esc(ph)}">${esc(p.target?.[k] ?? '')}</textarea>`
+        : `<input name="t_${k}" value="${esc(p.target?.[k] ?? '')}" placeholder="${esc(ph)}">`}</label>`).join('')}
     </div>
     <div class="toolbar"><span class="spacer"></span><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Save</button></div>`;
   dlg.showModal();
@@ -206,7 +249,11 @@ function openProjectDialog(name) {
 $('#projectDialog').addEventListener('close', () => {
   const dlg = $('#projectDialog');
   if (dlg.returnValue !== 'save') return;
-  const d = Object.fromEntries(new FormData($('#projectForm')));
+  const raw = Object.fromEntries(new FormData($('#projectForm')));
+  const d = {}, target = {};
+  for (const [k, v] of Object.entries(raw)) if (k.startsWith('t_')) target[k.slice(2)] = v.trim(); else d[k] = v;
+  for (const k of ['revenue', 'ebitda', 'employees']) target[k] = Engine.parseNumber(target[k]);
+  d.target = target;
   d.name = norm(d.name);
   if (!d.name) return;
   const old = dlg.dataset.name;

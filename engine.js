@@ -64,6 +64,20 @@ const Engine = (() => {
     return 'Other';
   }
 
+  // Columns of the pipeline board, in process order.
+  const BOARD_STAGES = ['Not approached', 'Teaser sent', 'Reminder sent', 'NDA signed', 'IM sent', 'Meeting', 'Offer', 'Passed'];
+  function boardStage(s) {
+    const t = lower(s);
+    if (!t || /not (yet )?approached|^1\./.test(t)) return 'Not approached';
+    if (/pass|declin|not interested|no interest|dropped|rejected/.test(t)) return 'Passed';
+    if (/offer|\bioi\b|\bloi\b|\bbid\b|term sheet/.test(t)) return 'Offer';
+    if (/meeting|session|call|visit/.test(t)) return 'Meeting';
+    if (/\bim\b|info ?memo|under review|data ?room|\bcim\b/.test(t)) return 'IM sent';
+    if (/nda/.test(t)) return 'NDA signed';
+    if (/reminder|no response|awaiting|^[34]\./.test(t)) return 'Reminder sent';
+    return 'Teaser sent';
+  }
+
   // Simple ownership buckets for filtering.
   function ownershipType(s) {
     const t = lower(s);
@@ -107,12 +121,14 @@ const Engine = (() => {
   for (const [region, list] of Object.entries(REGIONS)) list.forEach(c => (COUNTRY_TO_REGION[c] = region));
   const EUROPE = new Set(['Benelux', 'DACH', 'UK & Ireland', 'Nordics', 'France', 'Southern Europe', 'CEE']);
 
+  // Too common in company descriptions to say anything about fit.
+  const GENERIC = new Set('management platform platforms software solution solutions service services system systems technology technologies digital data enterprise enterprises business businesses customer customers client clients product products offering offers provides provider providers vendor vendors developer develops company germany german europe european global international leading based market markets industry industries including also other multiple various range full suite cloud online web it tools tool specialist specialised specialized'.split(' '));
   const STOPWORDS = new Set('a an and or the of for in on to with by from at as is are be we our their its it this that b2b b2c company companies group holding bv nv ltd gmbh inc llc services solutions provider leading based international also own e.g. etc'.split(' '));
   // Removed when comparing names for duplicates: "x-tention Unternehmensgruppe" = "X-Tention GmbH".
   const LEGAL_WORDS = new Set('bv b.v nv n.v gmbh ag sa sas sarl srl spa ltd limited plc inc incorporated llc lp llp co kg ohg se ab as oy aps bvba vof cv holding holdings group groep gruppe unternehmensgruppe the de and'.split(' '));
 
-  const DEFAULT_WEIGHTS = { sector: 35, geography: 15, size: 20, keywords: 20, role: 10 };
-  const WEIGHT_LABELS = { sector: 'Sector', geography: 'Geography', size: 'Size fit', keywords: 'Keywords', role: 'Buyer/target role' };
+  const DEFAULT_WEIGHTS = { sector: 30, keywords: 25, appetite: 15, geography: 10, size: 10, history: 5, role: 5 };
+  const WEIGHT_LABELS = { sector: 'Sector', keywords: 'Keywords', appetite: 'M&A appetite', geography: 'Geography', size: 'Size fit', history: 'History with us', role: 'Buyer/target role' };
 
   const norm = s => String(s ?? '').replace(/\s+/g, ' ').trim();
   const lower = s => norm(s).toLowerCase();
@@ -400,12 +416,14 @@ const Engine = (() => {
   const primaryContact = c => (c.contacts || []).find(x => x.email) || null;
   const hasEmail = c => !!primaryContact(c);
 
+  const textOf = c => [c.short_description, c.summary, c.description, c.keywords, (c.tags || []).join(' '), c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
   function tokens(c) {
-    const text = [c.short_description, c.summary, c.description, c.keywords, (c.tags || []).join(' '), c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
-    return new Set(text.split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t)));
+    return new Set(textOf(c).split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t) && !GENERIC.has(t)));
   }
 
   const sameish = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
+  // "Input management / IDP" -> ["input management", "idp"]
+  const segments = s => lower(s).split(/\s*[\/,;&|]\s*|\s+and\s+/).map(x => x.trim()).filter(x => x && !GENERIC.has(x));
 
   function sectorScore(deal, cand) {
     const ds = lower(deal.sector), cs = lower(cand.sector);
@@ -415,9 +433,21 @@ const Engine = (() => {
     if (cs && dealWants.some(w => sameish(w, cs) || sameish(w, cSub))) return [1, `${cand.sector} is in deal focus`];
     if (ds && cs && ds === cs) return dSub && cSub && dSub === cSub ? [1, `Same sub-sector: ${cand.subsector}`] : [0.85, `Same sector: ${cand.sector}`];
     if (sameish(ds, cs) || (dSub && sameish(dSub, cSub))) return [0.6, `Related sector: ${cand.sector}`];
-    const dt = new Set(ds.split(/\W+/).filter(t => t.length > 3)), overlap = cs.split(/\W+/).filter(t => dt.has(t));
-    if (overlap.length) return [0.4, `Sector overlap: ${overlap[0]}`];
+    const dSeg = segments(deal.sector + '/' + (deal.subsector || '')), cSeg = segments(cand.sector + '/' + (cand.subsector || ''));
+    const segHit = dSeg.find(a => cSeg.some(b => a === b || (a.length > 4 && b.length > 4 && sameish(a, b))));
+    if (segHit) return [0.75, `Same segment: ${segHit.toUpperCase().length <= 4 ? segHit.toUpperCase() : segHit}`];
+    const dt = new Set(ds.split(/\W+/).filter(t => t.length > 3 && !GENERIC.has(t))), overlap = cs.split(/\W+/).filter(t => dt.has(t));
+    if (overlap.length) return [0.35, `Sector overlap: ${overlap[0]}`];
     return [0, null];
+  }
+
+  // Deal keywords like "input management; document AI" matched as phrases in the buyer's texts.
+  function phraseScore(deal, cand) {
+    const phrases = [...new Set(splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p)))];
+    if (!phrases.length) return [0, []];
+    const text = ' ' + textOf(cand).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+    const hits = phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
+    return [Math.min(1, hits.length / Math.min(3, phrases.length)), hits];
   }
 
   function geographyScore(deal, cand) {
@@ -452,13 +482,14 @@ const Engine = (() => {
     return [Math.max(0, ratio - 0.3), null];
   }
 
-  function keywordScore(dealTokens, cand) {
+  function keywordScore(dealTokens, cand, deal) {
+    const [ps, hits] = phraseScore(deal, cand);
     const ct = tokens(cand);
-    if (!dealTokens.size || !ct.size) return [0, null];
-    const shared = [...dealTokens].filter(t => ct.has(t));
+    const shared = dealTokens.size && ct.size ? [...dealTokens].filter(t => ct.has(t)) : [];
+    const sim = shared.length ? Math.min(1, (shared.length / Math.sqrt(dealTokens.size * ct.size)) * 2.5) : 0;
+    if (hits.length && ps >= sim * 0.8) return [Math.max(ps, sim), `Matches: ${hits.slice(0, 4).join(', ')}`];
     if (!shared.length) return [0, null];
-    const sim = shared.length / Math.sqrt(dealTokens.size * ct.size);
-    return [Math.min(1, sim * 2.5), `Keywords: ${shared.slice(0, 4).join(', ')}`];
+    return [sim * 0.8, `Keywords: ${shared.slice(0, 4).join(', ')}`];
   }
 
   const BUY_SIDE = new Set(['Buyer', 'Investor']);
@@ -467,6 +498,28 @@ const Engine = (() => {
     if (deal.role === 'Target' && BUY_SIDE.has(cand.role)) return [1, `${cand.role} for a target`];
     if (BUY_SIDE.has(deal.role) && cand.role === 'Target') return [1, 'Potential target'];
     return [0, null];
+  }
+
+  // Serial acquirers and PE-backed platforms (add-on buyers) are more likely to buy.
+  function appetiteScore(cand) {
+    const acq = (cand.acquisitions || []).length;
+    const tags = (cand.tags || []).join(' ');
+    const said = cand.enrichment?.is_acquisitive;
+    if (acq >= 3 || said === 'yes' || /serial acquirer|acquisitive|buy-and-build|consolidator/.test(tags)) return [1, acq ? `${acq} acquisitions` : 'Acquisitive'];
+    if (acq >= 1 || said === 'some') return [0.7, `${acq || 'Some'} acquisition${acq === 1 ? '' : 's'}`];
+    if (ownershipType(cand.ownership) === 'PE-backed') return [0.6, 'PE-backed (add-on buyer)'];
+    if (cand.role === 'Investor') return [0.6, null];
+    return [0.2, null];
+  }
+
+  // How this buyer behaved in our earlier projects.
+  function historyScore(cand, deal) {
+    const others = (cand.projects || []).filter(p => p.project && p.project !== deal.project);
+    if (!others.length) return [0.4, null];
+    const g = others.map(p => stageGroup(p.status));
+    if (g.includes('Engaged')) return [1, `Engaged in ${others.find(p => stageGroup(p.status) === 'Engaged').project}`];
+    if (g.includes('Passed')) return [0.3, `Passed in ${others.find(p => stageGroup(p.status) === 'Passed').project}`];
+    return [0.6, `Known from ${others[0].project}`];
   }
 
   function match(deal, companies, weights = DEFAULT_WEIGHTS) {
@@ -481,11 +534,15 @@ const Engine = (() => {
           sector: sectorScore(deal, c),
           geography: geographyScore(deal, c),
           size: sizeScore(deal, c, candIsBuyerSide),
-          keywords: keywordScore(dealTokens, c),
+          keywords: keywordScore(dealTokens, c, deal),
           role: roleScore(deal, c),
+          appetite: appetiteScore(c),
+          history: historyScore(c, deal),
         };
         let sum = 0;
         for (const [k, [v]] of Object.entries(parts)) sum += v * Number(weights[k] || 0);
+        // Without any business fit, geography or appetite alone shouldn't make a good match.
+        if (parts.sector[0] === 0 && parts.keywords[0] < 0.2) sum *= 0.4;
         return { company: c, score: Math.round((sum / totalW) * 100), reasons: Object.values(parts).map(p => p[1]).filter(Boolean) };
       })
       .sort((a, b) => b.score - a.score);
@@ -510,7 +567,7 @@ const Engine = (() => {
   }
 
   return {
-    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
+    COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, boardStage, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
     normName, domainOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };

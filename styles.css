@@ -170,6 +170,33 @@ tr.sel { background: var(--accent-soft) !important; }
 .ext.li { background: #0a66c2; color: #fff; font-weight: 700; }
 .ext.li:hover { background: #004182; }
 
+/* ---------- Project tabs, overview, board ---------- */
+.page-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin: -4px 0 16px; }
+.page-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 9px 14px; font: inherit; font-weight: 500; color: var(--muted); cursor: pointer; }
+.page-tabs button.active { color: var(--accent); border-color: var(--accent); }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 99px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; text-align: center; }
+.overview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.overview-grid .span2 { grid-column: 1 / -1; }
+@media (max-width: 1100px) { .overview-grid { grid-template-columns: 1fr; } }
+.stage-list { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 16px; margin-top: 12px; font-size: 13px; }
+.stage-list div { display: flex; justify-content: space-between; border-bottom: 1px dashed var(--line); padding: 3px 0; }
+table.val td { vertical-align: top; }
+table.val tr.total td { border-top: 2px solid var(--line-strong); }
+input.mult { width: 46px; padding: 2px 4px; text-align: right; font-size: 13px; }
+.board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; align-items: flex-start; }
+.col { flex: 0 0 240px; background: #eef1f5; border-radius: 12px; padding: 8px; max-height: calc(100vh - 290px); display: flex; flex-direction: column; border: 2px solid transparent; }
+.col.over { border-color: var(--accent); background: var(--accent-soft); }
+.col-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px 8px; font-weight: 600; font-size: 13px; border-top: 3px solid; border-radius: 3px; padding-top: 8px; }
+.col-head b { background: #fff; border-radius: 99px; padding: 0 8px; font-size: 12px; }
+.col-body { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 60px; }
+.kcard { background: #fff; border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px; cursor: grab; box-shadow: var(--shadow); }
+.kcard:hover { border-color: var(--accent); }
+.kcard.dragging { opacity: .4; }
+.kcard .co { min-width: 0; gap: 8px; }
+.kcard .co-name { font-size: 13px; }
+.kcard .co-sub { max-width: 170px; }
+.kmeta { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; margin-top: 6px; }
+
 /* ---------- Research queue ---------- */
 .queue { position: fixed; right: 20px; bottom: 20px; width: 340px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 40px rgba(15,23,42,.18); padding: 14px; z-index: 15; }
 .queue h4 { margin: 0 0 6px; font-size: 14px; }

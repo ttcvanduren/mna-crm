@@ -15,7 +15,7 @@ The data lives in a **shared team database** (Supabase) once connected, or in yo
 
 Upload these files to your `mna-crm` repo with **Add file → Upload files → Commit changes**:
 
-`index.html`, `app.js`, `projects.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
+`index.html`, `app.js`, `projects.js`, `pipeline.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
 
 **Don't upload** `CLAUDE.md`, `sample-companies.csv`, or the `.claude`, `database` and `research` folders. They contain client data or local tooling.
 
@@ -68,7 +68,27 @@ This uses your subscription's usage limits instead of paid API calls. It works w
 - Claude **never guesses email addresses**. Emails come from your own lists, or you add them by hand.
 - Your own data always wins: Claude only fills in empty fields, and never overwrites what you imported.
 
-## 4. Importing lists
+## 4. Running a deal in a project
+
+Each project has five tabs:
+
+- **Overview:**
+  - **Deal profile:** the company you're selling. Fill it in via *Edit project & deal profile*, including sector, keywords, revenue, EBITDA and a codename for emails.
+  - **Valuation:** an EV range from editable revenue and EBITDA multiples.
+  - **Offers:** a comparison of bids against the mid valuation.
+  - **Precedent acquisitions:** deals done by matching buyers.
+- **Buyers:** the longlist, with a funnel, filters, **Move selected to…** a stage, and **Email selected**.
+- **Pipeline board:** drag buyers between the stages Not approached → Teaser sent → Reminder sent → NDA signed → IM sent → Meeting → Offer → Passed.
+  - Moving a buyer to **Offer** asks for the amount and type (IOI/LOI/Firm).
+  - Moving a buyer to **Passed** asks for the reason.
+- **✦ Find buyers:** ranks every company in the database that isn't on the project yet. The score covers sector, keyword phrases, M&A appetite (acquisitions, PE-backed add-on buyers), geography, size, and history with us (engaged or passed in earlier projects). *Add selected* puts them on the longlist with a tier.
+- **Follow-ups:** buyers whose teaser or reminder went out more than *N* days ago.
+  - **Email reminder to selected** sends a reminder.
+  - **Mark selected as reminded** only updates their stage.
+
+When you **send** emails from a project (not drafts), each buyer moves one step: Not approached → Teaser sent → Reminder sent → 2nd reminder sent. The date and a log line are added automatically.
+
+## 5. Importing lists
 
 Click **Import Excel / CSV**. You can select several files at once. For each file:
 

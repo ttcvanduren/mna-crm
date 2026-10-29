@@ -981,6 +981,7 @@ function setDeal(id) {
   const deal = byId(id);
   if (!deal) return;
   state.campaign.dealId = id;
+  state.campaign.project = null;
   $('#matchFor').value = deal.name;
   $('#matchForInfo').innerHTML = [deal.role, deal.sector, deal.subsector, deal.country, deal.revenue != null ? `${money(deal, deal.revenue)} revenue` : ''].filter(Boolean).map(esc).join(' · ');
   // Default: a target looks for buyers/investors, a buyer looks for targets.
@@ -1017,7 +1018,7 @@ function contactedFor(dealId) {
 function runMatch() {
   renderRoleFilters();
   const deal = byId(state.campaign.dealId);
-  if (!deal) { $('#matchTable tbody').innerHTML = '<tr><td colspan="9"><div class="empty">Choose a company on the left to find matches.</div></td></tr>'; syncCampaign(); return; }
+  if (!deal) { $('#matchTable tbody').innerHTML = '<tr><td colspan="9"><div class="empty">Choose a company on the left to find matches.</div></td></tr>'; if (!state.campaign.project) syncCampaign(); return; }
   const onlyEmail = $('#onlyWithEmail').checked, hide = $('#hideContacted').checked;
   const min = Number($('#minScore').value) || 0;
   const done = contactedFor(deal.id);
@@ -1118,10 +1119,17 @@ function updateSendLabel() {
   $('#sendBtn').disabled = !n;
 }
 
+// The company being sold: a company from the Match engine, or a project's deal profile.
+function currentDeal() {
+  if (state.campaign.dealId) return byId(state.campaign.dealId);
+  const proj = state.campaign.project && state.projects.find(p => p.name === state.campaign.project);
+  return proj ? dealOf(proj) : null;
+}
+
 function renderEmail() {
-  const deal = byId(state.campaign.dealId);
+  const deal = currentDeal();
   const ids = state.campaign.recipientIds;
-  $('#campaignInfo').innerHTML = deal ? `Deal: <b>${esc(deal.name)}</b>` : 'No deal chosen. Pick a company in the Match engine first.';
+  $('#campaignInfo').innerHTML = deal ? `${state.campaign.project ? `Project <b>${esc(state.campaign.project)}</b> · sending moves each buyer to the next stage` : `Deal: <b>${esc(deal.name)}</b>`}` : 'No deal chosen. Pick buyers in a project or a company in the Match engine.';
   $('#recipientCount').textContent = `(${ids.length} companies · ${allSends().length} emails)`;
   if (!ids.includes(state.previewId)) state.previewId = ids[0] || null;
   $('#recipients').innerHTML = ids.map(id => {
@@ -1145,7 +1153,7 @@ function renderEmail() {
 $('#recipients').addEventListener('click', e => {
   if (e.target.tagName === 'SELECT' || e.target.tagName === 'OPTION') return;
   const rm = e.target.dataset.remove;
-  if (rm) { state.selected.delete(rm); syncCampaign(); renderEmail(); return; }
+  if (rm) { state.selected.delete(rm); state.campaign.recipientIds = state.campaign.recipientIds.filter(x => x !== rm); renderEmail(); return; }
   const row = e.target.closest('[data-rid]');
   if (row) { state.previewId = row.dataset.rid; renderEmail(); }
 });
@@ -1162,7 +1170,7 @@ function compose(deal, c, contact) {
   return { subject: Engine.render($('#subject').value, deal, c, contact, extra), body: Engine.render($('#body').value, deal, c, contact, extra) };
 }
 function renderPreview() {
-  const deal = byId(state.campaign.dealId), c = byId(state.previewId);
+  const deal = currentDeal(), c = byId(state.previewId);
   const contact = c && sendsFor(c)[0];
   if (!deal || !contact) { $('#preview').textContent = ''; return; }
   const m = compose(deal, c, contact);
@@ -1170,7 +1178,7 @@ function renderPreview() {
 }
 
 $('#sendBtn').addEventListener('click', async () => {
-  const deal = byId(state.campaign.dealId);
+  const deal = currentDeal();
   const sends = allSends();
   if (!deal || !sends.length) return;
   const mode = sendMode();
@@ -1183,6 +1191,7 @@ $('#sendBtn').addEventListener('click', async () => {
   state.sendStatus = {};
   const cc = $('#cc').value.split(/[;,]/).map(s => s.trim()).filter(Boolean);
   const entries = [];
+  const advanced = new Set();
   let ok = 0, fail = 0;
   for (let i = 0; i < sends.length; i++) {
     const { company: c, contact } = sends[i];
@@ -1197,6 +1206,13 @@ $('#sendBtn').addEventListener('click', async () => {
       if (mode === 'send') {
         if (!c.status || c.status === 'New') c.status = 'Contacted';
         c.last_contacted = new Date().toISOString();
+        // In a project, an email moves the buyer one outreach step (once per company).
+        if (state.campaign.project && !advanced.has(c.id)) {
+          advanced.add(c.id);
+          const cur = c.projects.find(p => p.project === state.campaign.project)?.status;
+          const next = nextOutreachStage(cur);
+          if (next) moveStage(c, state.campaign.project, next, `email to ${contact.name || contact.email}`);
+        }
         touch(c);
       }
     } catch (err) {
@@ -1204,7 +1220,7 @@ $('#sendBtn').addEventListener('click', async () => {
       state.sendStatus[c.id + '|' + contact.email] = '✗';
       fail++;
     }
-    const entry = { id: uid(), date: new Date().toISOString(), dealId: deal.id, dealName: deal.name, companyId: c.id, companyName: c.name, contactName: contact.name || '', email: contact.email, subject: m.subject, result, ok: result === 'Sent', by: Store.user?.email || '' };
+    const entry = { id: uid(), date: new Date().toISOString(), dealId: deal.id, dealName: state.campaign.project || deal.name, companyId: c.id, companyName: c.name, contactName: contact.name || '', email: contact.email, subject: m.subject, result, ok: result === 'Sent', by: Store.user?.email || '' };
     state.activity.unshift(entry);
     entries.push(entry);
     renderEmail();
