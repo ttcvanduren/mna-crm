@@ -146,6 +146,7 @@ function renderDashboard() {
 
   $('#dashboardView').innerHTML = `<div class="page-head"><div><h1>Dashboard</h1><div class="muted">${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${active.length} active mandates</div></div>
       <div class="actions"><button class="btn" data-go="projects">All projects</button></div></div>
+    ${state.dupBannerDash ? `<div class="dup-banner"><span>⧉ <b>${state.dupBannerDash} duplicate records</b> found in your companies.</span><span class="spacer"></span><button class="btn primary" data-go="companies">Go to Companies to merge</button></div>` : ''}
     <div class="kpis">
       ${tile('Active mandates', active.length)}
       ${tile('Buyers contacted', f.contacted, `${pairs.length} on longlists`)}

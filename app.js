@@ -183,6 +183,7 @@ function filteredCompanies() {
 }
 
 function renderCompanies() {
+  checkDuplicates();
   const list = filteredCompanies();
   const shown = list.slice(0, state.limit);
   $('#companyCount').textContent = `${list.length.toLocaleString()} of ${state.companies.length.toLocaleString()} companies`;
@@ -202,7 +203,7 @@ function renderCompanies() {
       <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
       <td class="num">${money(c, c.revenue)}</td>
       <td>${c.contacts.length ? `${c.contacts.length}${emails ? ` <span class="muted small">· ${emails} ✉</span>` : ''} ${tags.map(t => `<span class="tag k">${esc(tagShort(t))}</span>`).join('')}` : '<span class="muted">–</span>'}</td>
-      <td>${(c.acquisitions || []).length ? `<button class="link" data-deals="${c.id}" title="${esc(c.acquisitions.slice(0, 5).map(a => `${a.date || a.year || ''} ${a.target}${a.industry ? ' – ' + a.industry : ''}`).join('\n'))}"><b>${c.acquisitions.length}</b> <span class="muted small">last ${esc(String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4))}</span></button>` : (c.acq_checked_at ? '<span class="muted small">none</span>' : '<span class="muted">–</span>')}</td>
+      <td>${(c.acquisitions || []).length ? `<button class="link" data-deals="${c.id}" title="${esc(c.acquisitions.slice(0, 5).map(a => `${a.date || a.year || ''} ${a.target}${a.industry ? ' – ' + a.industry : ''}`).join('\n'))}"><b>${c.acquisitions.length}</b> <span class="muted small">last ${esc(String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4))}</span></button>` : (c.acq_checked_at ? '<span class="muted small">none</span>' : Engine.listAcquisitionNotes(c).length ? `<button class="link small" data-deals="${c.id}" title="Acquisitions mentioned in your lists (not researched yet)">📝 in notes</button>` : '<span class="muted">–</span>')}</td>
       <td class="wrap">${projectChips(c)}</td>
       <td>${c.enrichment ? `<span class="chip purple" title="${esc(c.enrichment.model)}">✦ ${ago(c.enrichment.at)}</span>` : state.queue?.pending?.includes(c.id) ? '<span class="chip amber">queued</span>' : '<span class="muted small">—</span>'}</td>
     </tr>`;
@@ -403,6 +404,41 @@ async function mergeSelectedDuplicates() {
   openDuplicates();
 }
 $('#findDuplicates').addEventListener('click', openDuplicates);
+
+// Certain duplicates are detected in the background and offered as a one-click merge.
+let dupTimer;
+function checkDuplicates() {
+  clearTimeout(dupTimer);
+  dupTimer = setTimeout(() => {
+    const g = Engine.duplicateGroups(state.companies);
+    state.dupCertain = g.certain;
+    const extra = g.certain.reduce((n, x) => n + x.members.length - 1, 0);
+    $('#dupBanner').hidden = !extra;
+    $('#dupBanner').innerHTML = extra ? `<span>⧉ <b>${extra} records</b> are duplicates of another company (same website, LinkedIn, Capital IQ ID or name) in ${g.certain.length} groups.
+      Merging combines all contacts, projects and history into one record; nothing is deleted.</span><span class="spacer"></span>
+      <button class="btn" data-dupb="review">Review</button><button class="btn primary" data-dupb="merge">Merge all ${extra}</button>` : '';
+    if (state.dupBannerDash !== extra) { state.dupBannerDash = extra; if ($('#tab-dashboard').classList.contains('active')) renderDashboard(); }
+  }, 300);
+}
+async function mergeAllCertain() {
+  const remove = [];
+  for (const x of state.dupCertain || []) {
+    const members = x.members.filter(c => byId(c.id)).sort((a, b) => Engine.richness(b) - Engine.richness(a));
+    const [keep, ...rest] = members;
+    if (!keep || !rest.length) continue;
+    rest.forEach(c => { Engine.mergeCompanies(keep, c); remove.push(c.id); });
+    touch(keep);
+  }
+  await removeCompanies(remove);
+  renderCompanies();
+  renderProjects();
+  toast(`Merged ${remove.length} duplicate records into their main company. Nothing was deleted.`, 7000);
+}
+$('#dupBanner').addEventListener('click', e => {
+  const a = e.target.dataset.dupb;
+  if (a === 'review') openDuplicates();
+  if (a === 'merge' && confirm('Merge all certain duplicates now? Contacts, projects and history are combined; merged records can be restored from each company\'s Sources tab.')) mergeAllCertain();
+});
 $('#dupBody').addEventListener('click', e => {
   const a = e.target.closest('[data-dup]')?.dataset.dup, t = e.target.closest('[data-duptab]')?.dataset.duptab;
   if (t) { dup.tab = t; dup.sel = new Set(t === 'certain' ? dup.groups.certain.map(x => x.key) : []); return renderDuplicates(); }
@@ -469,7 +505,7 @@ function renderDrawer() {
   const e = c.enrichment;
   const researching = state.queue?.running?.has(c.id);
   const fact = (k, v) => v != null && v !== '' ? `<div class="fact"><div class="k">${k}</div><div class="v">${v}</div></div>` : '';
-  const tabs = [['overview', 'Overview'], ['people', `People (${c.contacts.length})`], ['acquisitions', `Acquisitions (${(c.acquisitions || []).length})`], ['projects', `Projects (${c.projects.length})`], ['sources', 'Sources']];
+  const tabs = [['overview', 'Overview'], ['people', `People (${c.contacts.length})`], ['acquisitions', `Acquisitions (${(c.acquisitions || []).length}${Engine.listAcquisitionNotes(c).length && !(c.acquisitions || []).length ? ' · 📝' : ''})`], ['projects', `Projects (${c.projects.length})`], ['sources', 'Sources']];
 
   let body = '';
   if (tab === 'overview') {
@@ -525,7 +561,9 @@ function renderDrawer() {
     const years = acq.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
     const recent = years.filter(y => y >= new Date().getFullYear() - 5).length;
     const inds = Object.entries(acq.reduce((m, a) => { if (a.industry) m[a.industry] = (m[a.industry] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 6);
-    body = acq.length ? `<div class="facts" style="margin-top:0">
+    const notes = Engine.listAcquisitionNotes(c);
+    const notesHtml = notes.length ? `<div class="list-notes"><h3 style="margin-top:0">📝 Mentioned in your lists</h3>${notes.map(n => `<div class="ln"><span>${esc(n.text)}</span><span class="muted small">${esc(n.from)}</span></div>`).join('')}</div>` : '';
+    body = notesHtml + (acq.length ? `<h3>Researched deals</h3><div class="facts" style="margin-top:0">
         <div class="fact"><div class="k">Deals recorded</div><div class="v">${acq.length}</div></div>
         <div class="fact"><div class="k">Last 5 years</div><div class="v">${recent}</div></div>
         <div class="fact"><div class="k">Most recent</div><div class="v">${esc(String(acq[0].date || acq[0].year || '–'))}</div></div>
@@ -543,7 +581,7 @@ function renderDrawer() {
         <div class="muted">${esc(a.description || '')}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div></div>`;
       }).join('')}</div>
       ${c.acq_checked_at ? `<p class="muted small">Researched ${esc(String(c.acq_checked_at).slice(0, 10))}.</p>` : ''}`
-      : `<div class="empty">No acquisitions recorded${c.acq_checked_at ? ': none found when researched on ' + esc(String(c.acq_checked_at).slice(0, 10)) : '. Select it in the list → Export for research, or ask Claude Code to research its acquisitions'}.</div>`;
+      : `<div class="empty">${c.acq_checked_at ? 'Research found no deals (checked ' + esc(String(c.acq_checked_at).slice(0, 10)) + ').' : `Not researched yet.${notes.length ? ' The notes above come from your own lists;' : ''} Research fills in the full deal list with dates, industry, size and sources (ask Claude Code, or Export for research).`}</div>`);
   } else if (tab === 'projects') {
     body = c.projects.map(p => `<div class="proj">
       <b>${esc(p.project || 'Project')}</b> <span class="muted small">${esc(state.projects.find(x => x.name === p.project)?.client || '')}</span> ${stageChip(p.status)}

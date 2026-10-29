@@ -673,6 +673,28 @@ const Engine = (() => {
     return [0, null];
   }
 
+  // Sentences from your own lists that talk about acquisitions ("Serial acquirer: Integic, soffico, ICW…").
+  const ACQ_WORDS = /acqui|acquir|bought|purchas|übernahm|übernimmt|übernahme|zukauf|overname|overgenomen|serial|buy[- ]and[- ]build|add-on|took over|takeover|merger|merged with|portfolio|platform investment|majority stake|stake in/i;
+  function listAcquisitionNotes(c) {
+    const sources = [['Description', c.description], ['Summary', c.summary], ['Notes', c.notes], ['Portfolio', c.portfolio], ...((c.alt?.description) || []).map(d => ['Other description', d])];
+    for (const p of c.projects || []) {
+      sources.push([`${p.project} remarks`, p.remarks], [`${p.project} log`, p.log], [`${p.project} rationale`, p.rationale]);
+      for (const [k, v] of Object.entries(p.extra || {})) sources.push([`${p.project} – ${k}`, v]);
+    }
+    const out = [], seen = new Set();
+    for (const [from, text] of sources) {
+      for (const seg of String(text || '').split(/\n|\s\|\s|(?<=[.!?])\s+(?=[A-Z])/)) {
+        const s = seg.replace(/^[^:]{0,40}:\s*(?=\S)/, m => (/remarks|comment|note/i.test(m) ? '' : m)).trim();
+        if (s.length < 12 || !ACQ_WORDS.test(s)) continue;
+        const key = s.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 80);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({ text: s.length > 320 ? s.slice(0, 317) + '…' : s, from });
+      }
+    }
+    return out;
+  }
+
   // Serial acquirers and PE-backed platforms (add-on buyers) are more likely to buy.
   function appetiteScore(cand, deal) {
     const acq = (cand.acquisitions || []).length;
@@ -685,6 +707,9 @@ const Engine = (() => {
       if (hit) return [1, `Bought ${hit.target}${hit.date || hit.year ? ` (${String(hit.date || hit.year).slice(0, 4)})` : ''}${hit.industry ? ': ' + hit.industry : ''}`];
     }
     if (acq >= 3 || said === 'yes' || /serial acquirer|acquisitive|buy-and-build|consolidator/.test(tags)) return [1, acq ? `${acq} acquisitions` : 'Acquisitive'];
+    const notes = listAcquisitionNotes(cand);
+    if (notes.some(n => /serial|acquisitive|buy[- ]and[- ]build|several acqui|multiple acqui/i.test(n.text))) return [0.9, 'Acquisitive (per your lists)'];
+    if (notes.length) return [0.65, 'Acquisitions noted in your lists'];
     if (acq >= 1 || said === 'some') return [0.7, `${acq || 'Some'} acquisition${acq === 1 ? '' : 's'}`];
     if (ownershipType(cand.ownership) === 'PE-backed') return [0.6, 'PE-backed (add-on buyer)'];
     if (cand.role === 'Investor') return [0.6, null];
@@ -751,7 +776,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

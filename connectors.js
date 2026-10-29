@@ -86,14 +86,17 @@ async function importAcquisitions(d) {
   const idx = Engine.buildIndex(state.companies);
   let companies = 0, deals = 0;
   for (const it of d.companies || []) {
-    const c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name || '', website: it.website || '' }, idx).exact[0];
-    if (!c) continue;
-    deals += mergeAcquisitions(c, it.acquisitions);
-    if (it.acquisitive && it.acquisitive !== 'unknown') c.acquisitive = it.acquisitive;
-    if (it.notes) c.acq_notes = it.notes;
-    c.acq_checked_at = d.created || new Date().toISOString();
-    touch(c);
-    companies++;
+    // Match on the research file's ID and on website/name, so un-merged duplicates all get the deals.
+    const probe = { name: it.name || '', website: it.website || byId(it.id)?.website || '' };
+    const targets = [...new Set([byId(it.id), ...Engine.findDuplicates(probe, idx).exact].filter(Boolean))];
+    for (const c of targets) {
+      deals += mergeAcquisitions(c, it.acquisitions);
+      if (it.acquisitive && it.acquisitive !== 'unknown') c.acquisitive = it.acquisitive;
+      if (it.notes) c.acq_notes = it.notes;
+      c.acq_checked_at = d.created || new Date().toISOString();
+      touch(c);
+    }
+    if (targets.length) companies++;
   }
   await flush();
   renderCompanies();

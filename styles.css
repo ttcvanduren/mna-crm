@@ -248,6 +248,11 @@ input.mult { width: 46px; padding: 2px 4px; text-align: right; font-size: 13px; 
 .chip.heat { font-weight: 600; }
 
 /* ---------- Duplicates ---------- */
+.list-notes { background: #fafbff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; }
+.list-notes .ln { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px dashed var(--line); }
+.list-notes .ln:last-child { border-bottom: 0; }
+.list-notes .ln .muted { white-space: nowrap; }
+.dup-banner { display: flex; align-items: center; gap: 10px; background: var(--warn-soft); border: 1px solid #fedf89; color: #7a2e0e; border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; }
 .dup-list { display: flex; flex-direction: column; gap: 10px; max-height: 62vh; overflow: auto; }
 .dup-group { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .dup-group.on { border-color: var(--accent); background: #fafbff; }
