@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>M&amp;A CRM</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@2.38.3/lib/msal-browser.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>M&amp;A CRM</h1>
+    <nav>
+      <button class="tab active" data-tab="companies">Companies</button>
+      <button class="tab" data-tab="match">Match engine</button>
+      <button class="tab" data-tab="email">Email</button>
+      <button class="tab" data-tab="activity">Activity</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+    <div id="account" class="account"></div>
+  </header>
+
+  <main>
+    <!-- COMPANIES -->
+    <section id="tab-companies" class="panel active">
+      <div class="toolbar">
+        <label class="btn primary">Upload CSV / Excel
+          <input type="file" id="upload" accept=".csv,.xlsx,.xls" hidden>
+        </label>
+        <button class="btn" id="addCompany">+ Add company</button>
+        <button class="btn" id="downloadTemplate">Download template</button>
+        <input type="search" id="search" placeholder="Search name, sector, country, email…">
+        <select id="filterRole"><option value="">All roles</option></select>
+        <span id="companyCount" class="muted"></span>
+      </div>
+      <div class="table-wrap">
+        <table id="companyTable">
+          <thead><tr>
+            <th>Name</th><th>Role</th><th>Sector</th><th>Country</th>
+            <th class="num">Revenue (m)</th><th class="num">EBITDA (m)</th>
+            <th>Contact</th><th>Email</th><th>Status</th><th></th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- MATCH -->
+    <section id="tab-match" class="panel">
+      <div class="match-grid">
+        <aside class="card">
+          <h2>Find matches for</h2>
+          <input list="companyList" id="matchFor" placeholder="Type a company name…">
+          <datalist id="companyList"></datalist>
+          <div id="matchForInfo" class="muted small"></div>
+
+          <h3>Show only</h3>
+          <div id="roleFilters" class="chips"></div>
+          <label class="row"><input type="checkbox" id="onlyWithEmail" checked> Only companies with an email</label>
+          <label class="row"><input type="checkbox" id="hideContacted"> Hide companies already emailed for this deal</label>
+          <label class="row">Minimum score <input type="number" id="minScore" value="20" min="0" max="100" style="width:70px"></label>
+
+          <h3>Weights</h3>
+          <div id="weights"></div>
+          <button class="btn" id="resetWeights">Reset weights</button>
+        </aside>
+
+        <div class="card">
+          <div class="toolbar">
+            <h2 style="margin:0">Matches <span id="matchCount" class="muted"></span></h2>
+            <span class="spacer"></span>
+            <button class="btn" id="selectTop">Select top 25</button>
+            <button class="btn" id="selectNone">Clear</button>
+            <button class="btn" id="exportMatches">Export CSV</button>
+            <button class="btn primary" id="emailSelected">Email selected →</button>
+          </div>
+          <div class="table-wrap">
+            <table id="matchTable">
+              <thead><tr><th><input type="checkbox" id="checkAll"></th><th>Score</th><th>Company</th><th>Role</th><th>Sector</th><th>Country</th><th class="num">Revenue (m)</th><th>Email</th><th>Why</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- EMAIL -->
+    <section id="tab-email" class="panel">
+      <div class="email-grid">
+        <div class="card">
+          <h2>Campaign</h2>
+          <div class="muted small" id="campaignInfo">No recipients yet. Select companies in the Match engine.</div>
+          <label>Template
+            <select id="templateSelect"></select>
+          </label>
+          <div class="toolbar">
+            <button class="btn" id="saveTemplate">Save template</button>
+            <button class="btn" id="saveTemplateAs">Save as new…</button>
+            <button class="btn" id="deleteTemplate">Delete</button>
+          </div>
+          <label>Subject <input id="subject"></label>
+          <label>Body <textarea id="body" rows="14"></textarea></label>
+          <div class="muted small">Placeholders: <code>{{first_name}}</code> <code>{{contact_name}}</code> <code>{{company}}</code> <code>{{sector}}</code> <code>{{country}}</code> <code>{{deal_name}}</code> <code>{{deal_sector}}</code> <code>{{deal_country}}</code> <code>{{deal_revenue}}</code> <code>{{deal_description}}</code> <code>{{sender_name}}</code></div>
+          <label>CC (optional) <input id="cc" placeholder="colleague@33equity.eu"></label>
+          <div class="toolbar">
+            <label class="row"><input type="radio" name="sendMode" value="draft" checked> Save as Outlook drafts</label>
+            <label class="row"><input type="radio" name="sendMode" value="send"> Send now</label>
+          </div>
+          <button class="btn primary big" id="sendBtn">Create drafts</button>
+          <div id="sendProgress" class="small"></div>
+        </div>
+        <div class="card">
+          <h2>Recipients <span id="recipientCount" class="muted"></span></h2>
+          <div id="recipients"></div>
+          <h3>Preview</h3>
+          <div id="preview" class="preview"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ACTIVITY -->
+    <section id="tab-activity" class="panel">
+      <div class="toolbar">
+        <input type="search" id="activitySearch" placeholder="Search activity…">
+        <button class="btn" id="exportActivity">Export CSV</button>
+      </div>
+      <div class="table-wrap">
+        <table id="activityTable">
+          <thead><tr><th>Date</th><th>Deal</th><th>Company</th><th>Email</th><th>Subject</th><th>Result</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SETTINGS -->
+    <section id="tab-settings" class="panel">
+      <div class="card narrow">
+        <h2>Microsoft / Outlook</h2>
+        <p class="muted small">Register an app in Azure once (see README) and paste its IDs here.</p>
+        <label>Application (client) ID <input id="clientId" placeholder="00000000-0000-0000-0000-000000000000"></label>
+        <label>Directory (tenant) ID <input id="tenantId" placeholder="your tenant id, or 'organizations'"></label>
+        <label>Your name (for {{sender_name}}) <input id="senderName"></label>
+        <label>Seconds between emails <input type="number" id="delaySec" min="1" value="3"></label>
+        <button class="btn primary" id="saveSettings">Save settings</button>
+        <button class="btn" id="signIn">Sign in with Microsoft</button>
+        <button class="btn" id="signOut">Sign out</button>
+
+        <h2>Data</h2>
+        <p class="muted small">Your data is stored in this browser only. Back it up regularly.</p>
+        <button class="btn" id="backup">Download backup (JSON)</button>
+        <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
+        <button class="btn danger" id="wipe">Delete all companies</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- Edit dialog -->
+  <dialog id="editDialog">
+    <form method="dialog" id="editForm">
+      <h2 id="editTitle">Company</h2>
+      <div class="form-grid" id="editFields"></div>
+      <div class="toolbar">
+        <span class="spacer"></span>
+        <button class="btn" value="cancel">Cancel</button>
+        <button class="btn primary" value="save" id="editSave">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast"></div>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
