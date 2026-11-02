@@ -703,7 +703,7 @@ const Engine = (() => {
     // Strongest signal: the buyer already bought something in the deal's space.
     const phrases = deal ? [...new Set([...splitList(deal.keywords), ...segments(deal.sector || '')].filter(p => p.length > 2 && !GENERIC.has(p)))] : [];
     if (phrases.length) {
-      const hit = (cand.acquisitions || []).find(a => { const t = ' ' + lower([a.industry, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; return phrases.some(p => t.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ')); });
+      const hit = (cand.acquisitions || []).find(a => { const t = ' ' + lower([a.industry, a.tags, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; return phrases.some(p => t.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ')); });
       if (hit) return [1, `Bought ${hit.target}${hit.date || hit.year ? ` (${String(hit.date || hit.year).slice(0, 4)})` : ''}${hit.industry ? ': ' + hit.industry : ''}`];
     }
     if (acq >= 3 || said === 'yes' || /serial acquirer|acquisitive|buy-and-build|consolidator/.test(tags)) return [1, acq ? `${acq} acquisitions` : 'Acquisitive'];

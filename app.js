@@ -574,13 +574,15 @@ function renderDrawer() {
       ${inds.length ? `<div class="chips" style="margin:10px 0">${inds.map(([k, n]) => `<span class="chip purple">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('')}</div>` : ''}
       ${c.acq_notes ? `<p class="muted small">${esc(c.acq_notes)}</p>` : ''}
       <div class="timeline">${acq.map(a => {
-        const size = [a.deal_value && `Deal value ${a.deal_value}`, a.target_revenue && `Revenue ${a.target_revenue}`, a.target_employees && `${a.target_employees} employees`].filter(Boolean).join(' · ');
+        const size = [a.deal_value && `Deal value ${a.deal_value}`, a.target_revenue && `Revenue ${a.target_revenue}`, a.ev_revenue && `${a.ev_revenue}x revenue`, a.ev_ebitda && `${a.ev_ebitda}x EBITDA`, a.target_employees && `${a.target_employees} employees`, a.seller && `from ${a.seller}`].filter(Boolean).join(' · ');
         const site = a.target_website ? Engine.cleanUrl(a.target_website) : '';
         return `<div class="tl-item"><div class="tl-year">${esc(a.date || a.year || 'Date unknown')}${a.type ? ` · ${esc(a.type)}` : ''}${a.stake ? ` · ${esc(a.stake)}` : ''}</div>
         <div class="co-line"><b>${esc(a.target)}</b>${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener">↗ ${esc(Engine.domainOf(site))}</a>` : ''}
           ${a.industry ? `<span class="chip purple">${esc(a.industry)}</span>` : ''}${a.country ? `<span class="chip">${esc(a.country)}</span>` : ''}</div>
         ${size ? `<div class="small"><b>${esc(size)}</b></div>` : ''}
-        <div class="muted">${esc(a.description || '')}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : ''}</div></div>`;
+        <div class="muted">${esc(a.description || '')}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : a.source ? ` <span class="small">(${esc(a.source)})</span>` : ''}</div>
+        ${a.tags ? `<div class="chips" style="margin-top:4px">${String(a.tags).split(', ').slice(0, 8).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>` : ''}
+        ${a.why ? `<details class="small" style="margin-top:4px"><summary>Deal summary: why and how it was acquired</summary><p>${esc(a.why)}</p></details>` : ''}</div>`;
       }).join('')}</div>
       ${c.acq_checked_at ? `<p class="muted small">Researched ${esc(String(c.acq_checked_at).slice(0, 10))}.</p>` : ''}`
       : `<div class="empty">${c.acq_checked_at ? 'Research found no deals (checked ' + esc(String(c.acq_checked_at).slice(0, 10)) + ').' : `Not researched yet.${notes.length ? ' The notes above come from your own lists;' : ''} Research fills in the full deal list with dates, industry, size and sources (ask Claude Code, or Export for research).`}</div>`);

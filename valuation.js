@@ -1,4 +1,4 @@
-/* global Engine, Store, XLSX, state, esc, norm, toast, showTab, saveProjects, dealOf, eur, members, renderProjects, today */
+/* global Engine, Store, XLSX, state, esc, norm, toast, showTab, saveProjects, dealOf, eur, members, renderProjects, today, newCompany, touch, flush, renderCompanies, mergeAcquisitions */
 // Comparable-transactions valuation: a transactions database (e.g. Capital IQ exports), similarity matching against a
 // project's deal profile, a 10-factor software scorecard that adjusts the median multiples, and a printable report.
 
@@ -47,12 +47,14 @@ const TX_RULES = [
   ['website', /website|url|web/],
   ['target', /target|issuer|company|name/],
 ];
-const TX_LABELS = { id: 'Transaction ID', date: 'Announced', closed: 'Closed', target: 'Target', buyer: 'Buyer', seller: 'Seller', ev: 'EV (m)', deal_value: 'Deal value (m)', revenue: 'Target revenue (m)', ebitda: 'Target EBITDA (m)', employees: 'Employees', ev_revenue: 'EV/Revenue', ev_ebitda: 'EV/EBITDA', ev_ebit: 'EV/EBIT', description: 'Business description', industry: 'Industry', country: 'Country / location', stake: '% acquired', status: 'Status', type: 'Type', consideration: 'Consideration', website: 'Website', summary: 'Deal summary', tags: 'Topic tags', long_description: 'Long description', region: 'Region', buyer_country: 'Buyer country', buyer_industry: 'Buyer industry', mult_src: 'Multiple source' };
+const TX_LABELS = { id: 'Transaction ID', date: 'Announced', closed: 'Closed', target: 'Target', buyer: 'Buyer', seller: 'Seller', ev: 'EV (m)', deal_value: 'Deal value (m)', revenue: 'Target revenue (m)', ebitda: 'Target EBITDA (m)', employees: 'Employees', ev_revenue: 'EV/Revenue', ev_ebitda: 'EV/EBITDA', ev_ebit: 'EV/EBIT', description: 'Business description', industry: 'Industry', country: 'Country / location', stake: '% acquired', status: 'Status', type: 'Type', consideration: 'Consideration', website: 'Website', summary: 'Deal summary', tags: 'Topic tags', long_description: 'Long description', region: 'Region', buyer_country: 'Buyer country', buyer_industry: 'Buyer industry', buyer_description: 'Buyer description', tev: 'Target TEV (m)', currency: 'Currency', mined: 'Read from deal text', sources: 'Sources', mult_src: 'Multiple source' };
 const hk = h => String(h ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // S&P Capital IQ Pro exports have a row of field codes (SPTR_…) with labels above it (only for text fields) and periods below.
-const SPG_CODES = { SPTR_TARGET_NAME: 'target', SPTR_MI_TRANSACTION_ID: 'id', SPTR_ANN_DATE: 'date', SPTR_CLOSED_DATE: 'closed', SPTR_COMPLETION_DATE: 'closed', SPTR_TRANSACTION_TYPE: 'type', SPTR_STATUS: 'status', SPTR_TRANSACTION_VALUE: 'deal_value', 324281: 'buyer', 324283: 'seller', SPTR_MI_TARGET_PRIMARY_INDUSTRY: 'industry', 326140: 'region', SPTR_DEAL_SUMMARY: 'summary', SPTR_TARGET_COUNTRY: 'country', SPTR_ACQUIRER_COUNTRY: 'buyer_country', SPTR_SNL_TOTAL_REV: 'revenue', SPTR_SNL_EBITDA: 'ebitda' };
-const SPG_LABELS = [['description', /^business description.*target/], ['long_description', /^long business description.*target/], ['tags', /topic tags.*target/], ['industry', /primary industry.*target/], ['buyer_industry', /primary industry.*buyer/]];
+const SPG_CODES = { SPTR_TARGET_NAME: 'target', SPTR_MI_TRANSACTION_ID: 'id', SPTR_ANN_DATE: 'date', SPTR_CLOSED_DATE: 'closed', SPTR_COMPLETION_DATE: 'closed', SPTR_TRANSACTION_TYPE: 'type', SPTR_STATUS: 'status', SPTR_TRANSACTION_VALUE: 'deal_value', 324281: 'buyer', 324283: 'seller', SPTR_MI_TARGET_PRIMARY_INDUSTRY: 'industry', 326140: 'region', SPTR_DEAL_SUMMARY: 'summary', SPTR_TARGET_COUNTRY: 'country', SPTR_ACQUIRER_COUNTRY: 'buyer_country', SPTR_TARGET_CIQ_TOTAL_REV: 'revenue', SPTR_TARGET_CIQ_EBITDA: 'ebitda', SPTR_SNL_TOTAL_REV: 'revenue', SPTR_SNL_EBITDA: 'ebitda', SPTR_TARGET_TEV: 'tev', SPTR_TV_TO_SALES: 'ev_revenue', SPTR_TV_TO_EBITDA: 'ev_ebitda' };
+// Target financials come in USD thousands; transaction values and TEV in USD millions.
+const SPG_SCALE = { SPTR_TARGET_CIQ_TOTAL_REV: 0.001, SPTR_TARGET_CIQ_EBITDA: 0.001 };
+const SPG_LABELS = [['description', /^business description.*target/], ['long_description', /^long business description.*target/], ['tags', /topic tags.*target/], ['industry', /primary industry.*target/], ['buyer_industry', /primary industry.*buyer/], ['buyer_description', /^business description.*buyer/]];
 function spgLayout(rows) {
   const ci = rows.slice(0, 15).findIndex(r => r.some(v => /^SPTR_/.test(String(v))));
   if (ci < 0) return null;
@@ -62,11 +64,16 @@ function spgLayout(rows) {
     const f = SPG_CODES[String(c).trim()] || SPG_LABELS.find(([, re]) => re.test(headers[i].toLowerCase()))?.[0];
     if (f && !taken.has(f)) { map[i] = f; taken.add(f); }
   });
-  return { header: ci + 1, headers, map };
+  return { header: ci + 1, headers, map, scale: codes.map(c => SPG_SCALE[String(c).trim()] || 1) };
 }
 
 function mapTxHeaders(headers) {
   const out = headers.map(() => null), taken = new Set();
+  // The CRM's own master file: headers are exactly our labels.
+  const byLabel = new Map(Object.entries(TX_LABELS).map(([k, l]) => [hk(l), k]));
+  headers.forEach((h, i) => { const f = byLabel.get(hk(h)); if (f && !taken.has(f)) { out[i] = f; taken.add(f); } });
+  if (taken.size >= 8) return out;
+  out.fill(null); taken.clear();
   for (const [field, re] of TX_RULES) {
     const i = headers.findIndex((h, j) => !out[j] && h && re.test(hk(h)));
     if (i >= 0 && !taken.has(field)) { out[i] = field; taken.add(field); }
@@ -98,7 +105,9 @@ function txDate(v) {
 const cleanCountry = s => String(s || '').split(/[;|]/)[0].replace(/\(.*?\)/g, '').trim();
 // S&P wraps values as "Company (value)"; tags and buyer industries are "A (x); A (y)".
 const unwrapOwn = (s, name) => (name && s.startsWith(name + ' (') && s.endsWith(')') ? s.slice(name.length + 2, -1) : s);
-const lastParens = s => String(s).split(/;\s*/).map(p => p.match(/\(([^()]*)\)\s*$/)?.[1] || p).filter(Boolean);
+// "Name (Tag)" -> "Tag"; "Name (SaaS (x))" -> "SaaS (x)", also when S&P uses a slightly different company name.
+const tagOf = p => (/\)\)\s*$/.test(p) ? p.match(/^[^()]+\((.+)\)\s*$/)?.[1] : p.match(/\(([^()]*)\)\s*$/)?.[1]) || p;
+const lastParens = s => String(s).split(/;\s*/).map(tagOf).filter(Boolean);
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s);
 
 // ---------- Financials from the deal summary (S&P/Capital IQ deal text) ----------
@@ -144,44 +153,92 @@ function mineSummary(t) {
   return out;
 }
 
-function rowToTx(row, map, file, currency) {
-  const t = { source: file, currency };
+const NUM_FIELDS = new Set(['ev', 'tev', 'deal_value', 'revenue', 'ebitda', 'employees', 'ev_revenue', 'ev_ebitda', 'ev_ebit', 'stake']);
+function rowToTx(row, map, file, currency, scale = [], master = false) {
+  const t = { source: file, sources: [file], currency };
   map.forEach((f, i) => {
     if (!f) return;
     const v = row[i];
     if (v === '' || v == null || v === 'NA') return;
-    if (['ev', 'deal_value', 'revenue', 'ebitda', 'employees', 'ev_revenue', 'ev_ebitda', 'ev_ebit', 'stake'].includes(f)) t[f] = num(v);
+    if (NUM_FIELDS.has(f)) { const n = num(v); if (n != null) t[f] = n * (scale[i] || 1); }
     else if (f === 'date' || f === 'closed') t[f] = txDate(v);
     else if (f === 'country' || f === 'buyer_country') t[f] = cleanCountry(v);
+    else if (f === 'mined' || f === 'sources') t[f] = String(v).split(/,\s*/).filter(Boolean);
     else t[f] = norm(v);
   });
   if (!t.target) return null;
+  t.sources = [...new Set([file, ...(t.sources || [])])];
+  if (!master) cleanTexts(t);
+  return finishTx(t);
+}
+// The master file is already clean, so only fresh exports get their S&P text wrappers removed.
+function cleanTexts(t) {
   // Compact the long S&P text fields so thousands of deals stay small.
-  if (t.description) t.description = clip(unwrapOwn(t.description, t.target), 500);
-  if (t.long_description) { if (!t.description) t.description = clip(unwrapOwn(t.long_description, t.target), 500); delete t.long_description; }
-  if (t.tags) t.tags = [...new Set(t.tags.split(/;\s*/).flatMap(p => (p.startsWith(t.target + ' (') ? [unwrapOwn(p, t.target)] : lastParens(p))))].join(', ');
+  if (t.description) t.description = clip(unwrapOwn(t.description, t.target), 800);
+  if (t.long_description) { if (!t.description) t.description = clip(unwrapOwn(t.long_description, t.target), 800); delete t.long_description; }
+  // Only kept for single-buyer deals, where it unambiguously describes that buyer.
+  if (t.buyer_description) { const b = splitBuyers(t.buyer); if (b.length === 1) t.buyer_description = clip(unwrapOwn(t.buyer_description, b[0]), 500); else delete t.buyer_description; }
+  if (t.tags) t.tags = [...new Set(t.tags.split(/;\s*/).map(p => (p.startsWith(t.target + ' (') ? unwrapOwn(p, t.target) : tagOf(p))))].join(', ');
   if (t.buyer_industry) t.buyer_industry = [...new Set(lastParens(t.buyer_industry))].join(', ');
   if (/\(/.test(t.industry || '')) t.industry = lastParens(t.industry)[0];
-  // Fill multiples from EV and financials where the export didn't include them; drop implausible values.
-  const ev = t.ev ?? (t.deal_value != null && (t.stake == null || t.stake >= 95) ? t.deal_value : null);
-  if (t.ev_revenue == null && ev && t.revenue > 0) t.ev_revenue = ev / t.revenue;
-  if (t.ev_ebitda == null && ev && t.ebitda > 0) t.ev_ebitda = ev / t.ebitda;
-  if (t.summary && (t.ev_revenue == null || t.ev_ebitda == null)) {
+}
+function finishTx(t) {
+  // Multiples from EV (or the deal value of a whole-company deal) and reported financials.
+  const mined = new Set(t.mined || []);
+  // Reported EV first, then the deal value of a whole-company deal, then EV read from text, then the target's TEV.
+  const ev = (mined.has('ev') ? null : t.ev) ?? (t.deal_value != null && (t.stake == null || t.stake >= 95) ? t.deal_value : null) ?? t.ev ?? t.tev;
+  // A multiple computed from a figure that was read from deal text counts as read from deal text too.
+  const derive = (k, metric, evValue) => {
+    if (t[k] != null || !evValue || !(t[metric] > 0)) return;
+    t[k] = evValue / t[metric];
+    if (mined.has(metric) || (evValue === t.ev && mined.has('ev'))) mined.add(k);
+  };
+  derive('ev_revenue', 'revenue', ev); derive('ev_ebitda', 'ebitda', ev);
+  // Whatever is still missing is read from the deal summary and marked as such ("mined").
+  if (t.summary && !t.mined && (t.ev_revenue == null || t.ev_ebitda == null)) {
     const m = mineSummary(t);
-    for (const k of ['revenue', 'ebitda', 'ev']) if (t[k] == null && m[k] != null) t[k] = Math.round(m[k] * 100) / 100;
-    if (t.ev_revenue == null && m.ev_revenue != null) { t.ev_revenue = m.ev_revenue; t.mult_src = m.rev_kind === 'ARR' ? 'ARR multiple from deal text' : 'from deal text'; }
-    if (t.ev_ebitda == null && m.ev_ebitda != null) { t.ev_ebitda = m.ev_ebitda; t.mult_src ??= 'from deal text'; }
+    for (const k of ['revenue', 'ebitda', 'ev']) if (t[k] == null && m[k] != null) { t[k] = Math.round(m[k] * 100) / 100; mined.add(k); }
+    if (t.ev_revenue == null && m.ev_revenue != null) { t.ev_revenue = m.ev_revenue; mined.add('ev_revenue'); if (m.rev_kind === 'ARR') mined.add('arr'); }
+    if (t.ev_ebitda == null && m.ev_ebitda != null) { t.ev_ebitda = m.ev_ebitda; mined.add('ev_ebitda'); }
+    if (mined.has('ev')) { derive('ev_revenue', 'revenue', t.ev); derive('ev_ebitda', 'ebitda', t.ev); }
   }
-  if (t.summary) t.summary = clip(t.summary, 700);
+  if (t.summary) t.summary = clip(t.summary, 1500);
   t.ev_revenue = validMult(t.ev_revenue, 0.15, 30);
   t.ev_ebitda = validMult(t.ev_ebitda, 2, 60);
   t.ev_ebit = validMult(t.ev_ebit, 1, 120);
-  if (t.ev_revenue == null && t.ev_ebitda == null) delete t.mult_src;
   if (t.ev == null && ev != null) t.ev = ev;
+  t.mined = [...mined].filter(k => k === 'arr' || t[k] != null);
+  if (!t.mined.length) delete t.mined;
+  multSrc(t);
   t.year = yearOf(t);
   t.key = t.id || `${Engine.normName(t.target)}|${t.year || ''}|${Engine.normName(t.buyer || '')}`;
   return t;
 }
+// Display label for multiples that came from the deal text rather than reported financials.
+function multSrc(t) {
+  const m = t.mined || [];
+  if (m.includes('ev_revenue') || m.includes('ev_ebitda')) t.mult_src = m.includes('arr') ? 'ARR multiple from deal text' : 'from deal text';
+  else delete t.mult_src;
+}
+
+// Merges one incoming deal into a known one. Reported figures beat figures read from deal text; otherwise only blanks are filled.
+const MINEABLE = ['revenue', 'ebitda', 'ev', 'ev_revenue', 'ev_ebitda'];
+function mergeTx(cur, t) {
+  const curMined = new Set(cur.mined || []), newMined = new Set(t.mined || []);
+  for (const [k, v] of Object.entries(t)) {
+    if (v == null || v === '' || ['key', 'mined', 'sources', 'source', 'mult_src'].includes(k)) continue;
+    const blank = cur[k] == null || cur[k] === '';
+    const better = MINEABLE.includes(k) && curMined.has(k) && !newMined.has(k);
+    if (blank || better) { cur[k] = v; if (newMined.has(k)) curMined.add(k); else curMined.delete(k); }
+  }
+  if (!['ev_revenue', 'ev_ebitda'].some(k => curMined.has(k))) curMined.delete('arr');
+  cur.mined = [...curMined];
+  if (!cur.mined.length) delete cur.mined;
+  cur.sources = [...new Set([...(cur.sources || [cur.source].filter(Boolean)), ...(t.sources || [])])];
+  multSrc(cur);
+}
+// Deals from sources without a shared transaction ID still match on target + year (when that's unambiguous).
+const altKey = t => `${Engine.normName(t.target)}|${t.year || ''}`;
 
 async function importTransactionFiles(files) {
   const incoming = [], report = [];
@@ -198,27 +255,31 @@ async function importTransactionFiles(files) {
         if (!map.includes('target')) continue;
         const title = rows.slice(0, h + 1).flat().join(' ');
         const currency = spg || /usd|\$/i.test(title) ? 'USD' : /gbp|£/i.test(title) ? 'GBP' : /eur|€/i.test(title) ? 'EUR' : 'USD';
-        const txs = rows.slice(h + 1).map(r => rowToTx(r, map, f.name, currency)).filter(Boolean);
+        const master = map.includes('sources') || map.includes('mined');
+        const txs = rows.slice(h + 1).map(r => rowToTx(r, map, f.name, currency, spg?.scale, master)).filter(Boolean);
         incoming.push(...txs);
-        report.push({ file: f.name, sheet: name, rows: txs.length, mined: txs.filter(t => t.mult_src).length, map: headers.map((x, i) => map[i] ? `${x} → ${TX_LABELS[map[i]]}` : null).filter(Boolean), ignored: [...new Set(headers.filter((x, i) => x && !map[i]))] });
+        report.push({ file: f.name, sheet: name, rows: txs.length, rev: txs.filter(t => t.revenue != null && !t.mined?.includes('revenue')).length, mult: txs.filter(t => t.ev_revenue || t.ev_ebitda).length, mined: txs.filter(t => t.mult_src).length,
+          map: headers.map((x, i) => map[i] ? `${x} → ${TX_LABELS[map[i]]}` : null).filter(Boolean), ignored: [...new Set(headers.filter((x, i) => x && !map[i]))] });
       }
     } catch (err) { toast(`Could not read ${f.name}: ${err.message}`, 7000); }
   }
   if (!incoming.length) return toast('No transactions found. The sheet needs at least a target/company column.', 7000);
-  const preview = report.map(r => `${r.file} › ${r.sheet}: ${r.rows} rows${r.mined ? ` (${r.mined} with a multiple read from the deal summary)` : ''}\n   ${r.map.join('\n   ')}${r.ignored.length ? `\n   ignored: ${r.ignored.join(', ').replace(/\n/g, ' ')}` : ''}`).join('\n\n');
-  const withMult = incoming.filter(t => t.ev_revenue || t.ev_ebitda).length;
-  if (!confirm(`Import ${incoming.length.toLocaleString()} transactions (${withMult.toLocaleString()} with EV/Revenue or EV/EBITDA)?\n\n${preview.slice(0, 2500)}`)) return;
+  const preview = report.map(r => `${r.file} › ${r.sheet}: ${r.rows.toLocaleString()} deals · ${r.rev.toLocaleString()} with reported revenue · ${r.mult.toLocaleString()} with a multiple${r.mined ? ` (${r.mined.toLocaleString()} read from the deal summary)` : ''}\n   ${r.map.join('\n   ')}${r.ignored.length ? `\n   ignored: ${r.ignored.join(', ').replace(/\n/g, ' ')}` : ''}`).join('\n\n');
+  if (!confirm(`Import ${incoming.length.toLocaleString()} transactions? Deals you already have are merged, not duplicated.\n\n${preview.slice(0, 2500)}`)) return;
   const byKey = new Map(state.transactions.map(t => [t.key, t]));
+  const byAlt = new Map();
+  for (const t of state.transactions) { const k = altKey(t); byAlt.set(k, byAlt.has(k) ? null : t); }
   let added = 0, updated = 0;
   for (const t of incoming) {
-    const cur = byKey.get(t.key);
-    if (cur) { for (const [k, v] of Object.entries(t)) if (v != null && v !== '' && (cur[k] == null || cur[k] === '')) cur[k] = v; updated++; }
-    else { byKey.set(t.key, t); added++; }
+    let cur = byKey.get(t.key);
+    if (!cur && !(t.id && byAlt.get(altKey(t))?.id)) cur = byAlt.get(altKey(t)) || null; // never merge two deals that both have their own ID
+    if (cur) { mergeTx(cur, t); updated++; }
+    else { byKey.set(t.key, t); const k = altKey(t); byAlt.set(k, byAlt.has(k) ? null : t); added++; }
   }
-  state.transactions = [...byKey.values()];
+  state.transactions = [...new Set(byKey.values())];
   await saveTransactions();
   renderComps();
-  toast(`Transactions: ${added} new, ${updated} already known (details filled in).`, 7000);
+  toast(`Transactions: ${added.toLocaleString()} new, ${updated.toLocaleString()} merged into deals you already had.`, 8000);
 }
 
 // ---------- Similarity ----------
@@ -478,7 +539,7 @@ function renderComps() {
   const th = (k, label) => `<th class="num sortable ${cf.sort === k ? 'on' : ''}" data-csort="${k}">${label}${cf.sort === k ? ' ↓' : ''}</th>`;
 
   $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
-      <div class="actions"><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
+      <div class="actions"><button class="btn" data-vx="buyers" title="Create a company for every acquirer, with its deal history">Add buyers to Companies</button><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
         <label class="btn primary">Import transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
     <div class="filters">
       <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
@@ -501,6 +562,9 @@ function renderComps() {
       <div class="card"><h2>By industry</h2>${segTable(industries, 'data-cind', cf.industry)}</div>
       <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
         <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
+      <div class="card span2"><div class="toolbar" style="margin-bottom:6px"><h2 style="margin:0">Sources</h2><span class="spacer"></span><button class="btn sm" data-vx="mastertx" title="All deals from all sources in one Excel file; it can be imported again later">Download master file</button></div>
+        <div class="buyers">${sourceCounts().map(([s, n]) => `<div class="buyer-row"><span>${esc(s)}</span><span class="muted small">${n.toLocaleString()} deals</span><button class="link small" data-csrc-del="${esc(s)}">remove</button></div>`).join('')}</div>
+        <p class="muted small">Import as many files as you like (S&P Capital IQ, classic Capital IQ, PitchBook, Mergermarket, your own Excel). Deals are matched on transaction ID, or on target + year, and merged; reported financials replace figures read from deal text.</p></div>
     </div>
     <div class="table-wrap"><table class="data tx-table"><thead><tr><th class="sortable ${cf.sort === 'date' ? 'on' : ''}" data-csort="date">Date${cf.sort === 'date' ? ' ↓' : ''}</th><th>Target</th><th>Buyer</th><th>Country</th>${th('size', 'Deal value')}<th class="num">Revenue</th><th class="num">EBITDA</th>${th('evr', 'EV/Rev')}${th('eve', 'EV/EBITDA')}</tr></thead><tbody>
       ${list.slice(0, cf.limit).map(t => { const b = splitBuyers(t.buyer), c = b.map(x => crm.get(Engine.normName(x))).find(Boolean);
@@ -513,12 +577,82 @@ function renderComps() {
     <p class="muted small">Click a row for the deal summary. * = multiple read from the deal summary text (approximate; currencies converted at average rates). Deal value is the total transaction value reported by S&P/Capital IQ.</p>`;
 }
 
-function exportFilteredTx() {
-  const cols = ['date', 'target', 'buyer', 'seller', 'status', 'country', 'region', 'industry', 'tags', 'deal_value', 'ev', 'revenue', 'ebitda', 'ev_revenue', 'ev_ebitda', 'mult_src', 'description', 'summary', 'id'];
-  const rows = filteredTx().map(t => Object.fromEntries(cols.map(k => [TX_LABELS[k] || k, t[k] ?? ''])));
+// Master file layout: one row per deal with every field, using our own labels so it imports back losslessly.
+const MASTER_COLS = ['id', 'date', 'closed', 'target', 'buyer', 'seller', 'status', 'type', 'stake', 'country', 'region', 'industry', 'tags', 'currency', 'deal_value', 'ev', 'tev', 'revenue', 'ebitda', 'employees', 'ev_revenue', 'ev_ebitda', 'ev_ebit', 'mined', 'description', 'summary', 'buyer_country', 'buyer_industry', 'buyer_description', 'website', 'consideration', 'sources'];
+function exportTx(list, name) {
+  const rows = list.map(t => Object.fromEntries(MASTER_COLS.map(k => [TX_LABELS[k], Array.isArray(t[k]) ? t[k].join(', ') : t[k] ?? ''])));
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Transactions');
-  XLSX.writeFile(wb, `comps-${today()}.xlsx`);
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows, { header: MASTER_COLS.map(k => TX_LABELS[k]) }), 'Transactions');
+  XLSX.writeFile(wb, `${name}-${today()}.xlsx`, { compression: true });
+}
+const exportFilteredTx = () => exportTx(filteredTx(), 'comps');
+const exportMasterTx = () => exportTx([...state.transactions].sort((a, b) => String(b.date || '').localeCompare(String(a.date || ''))), 'transactions-master');
+const sourceCounts = () => [...state.transactions.flatMap(t => t.sources || [t.source]).filter(Boolean).reduce((m, s) => m.set(s, (m.get(s) || 0) + 1), new Map())];
+async function removeSource(src) {
+  const n = state.transactions.filter(t => (t.sources || [t.source]).length === 1 && (t.sources || [t.source])[0] === src).length;
+  if (!confirm(`Remove source "${src}"?\n\n${n.toLocaleString()} deals that only came from this file are deleted; deals also found in other files are kept.`)) return;
+  state.transactions = state.transactions.filter(t => { const s = (t.sources || [t.source]).filter(x => x !== src); if (!s.length) return false; t.sources = s; t.source = s[0]; return true; });
+  await saveTransactions();
+  renderComps();
+}
+
+// ---------- Buyers → Companies: every acquirer becomes a company with its deal history ----------
+const TX_SOURCE = 'S&P Capital IQ transactions';
+// Abbreviations like "L.P." or "Inc." split sentences too early, so take sentences until there's a real one.
+const firstSentences = s => { let out = ''; for (const x of sentencesOf(s)) { out += (out ? ' ' : '') + x; if (out.length >= 60) break; } return out; };
+function buyerGroups() {
+  const g = new Map();
+  for (const t of state.transactions) {
+    if (isDead(t)) continue;
+    const parts = String(t.buyer || '').split(/;\s*/).filter(Boolean);
+    for (const p of parts) {
+      const ticker = p.match(/\(([^()]*\w:[^()]*)\)\s*$/)?.[1] || '';
+      const name = p.replace(/\s*\([^()]*:[^()]*\)\s*$/, '').trim(), k = Engine.normName(name);
+      if (!k) continue;
+      if (!g.has(k)) g.set(k, { name, ticker, deals: [] });
+      const b = g.get(k);
+      b.deals.push(t);
+      b.ticker ||= ticker;
+      if (parts.length === 1) { b.country ||= t.buyer_country; b.industry ||= t.buyer_industry; b.description ||= t.buyer_description; }
+    }
+  }
+  for (const b of g.values()) b.role = FIN_BUYER.test(b.name) || /asset management|investment banking|diversified financial/i.test(b.industry || '') ? 'Investor' : 'Buyer';
+  return [...g.values()].sort((a, b) => b.deals.length - a.deals.length);
+}
+const acqFromTx = t => ({
+  target: t.target, date: t.date || '', year: t.year || '', industry: t.industry || '', country: t.country || '', seller: t.seller || '', status: t.status || '',
+  deal_value: t.deal_value != null ? `$${Engine.fmt(t.deal_value)}m` : '', target_revenue: t.revenue != null ? `$${Engine.fmt(t.revenue)}m` : '',
+  ev_revenue: t.ev_revenue ?? '', ev_ebitda: t.ev_ebitda ?? '', tags: t.tags || '', description: t.description || '', why: t.summary || '',
+  type: 'Acquisition', source: 'S&P Capital IQ', tx_id: t.id || '',
+});
+
+async function addBuyersToCompanies() {
+  const groups = buyerGroups();
+  const counts = [1, 2, 3, 5, 10].map(n => `   ${n}+ deals: ${groups.filter(g => g.deals.length >= n).length.toLocaleString()} buyers`).join('\n');
+  const ans = prompt(`Add the acquirers from your transactions to Companies, each with its full deal history (target, date, industry, size, multiples, topic tags and the deal summary). Existing companies with the same name get the deals added; nothing is overwritten.\n\n${counts}\n\nMinimum number of deals per buyer:`, '1');
+  if (ans == null) return;
+  const min = Math.max(1, parseInt(ans, 10) || 1), pick = groups.filter(g => g.deals.length >= min);
+  toast(`Adding ${pick.length.toLocaleString()} buyers…`);
+  const idx = Engine.buildIndex(state.companies);
+  let created = 0, updated = 0, deals = 0;
+  for (const g of pick) {
+    let targets = Engine.findDuplicates({ name: g.name }, idx).exact;
+    if (targets.length) updated++;
+    else { const c = newCompany(g.name); state.companies.push(c); targets = [c]; created++; }
+    for (const c of targets) {
+      const fill = (k, v) => { if (v && !c[k]) c[k] = v; };
+      fill('ticker', g.ticker); fill('country', g.country); fill('sector', g.industry); fill('role', g.role);
+      fill('description', g.description); fill('short_description', g.description && clip(firstSentences(g.description), 240));
+      if (g.ticker) fill('ownership', `Listed (${g.ticker})`);
+      deals += mergeAcquisitions(c, g.deals.map(acqFromTx));
+      if (c.acquisitions.length >= 3) c.acquisitive = 'yes'; else if (!c.acquisitive || c.acquisitive === 'unknown') c.acquisitive = 'some';
+      if (!c.sources.includes(TX_SOURCE)) c.sources.push(TX_SOURCE);
+      touch(c);
+    }
+  }
+  await flush();
+  renderCompanies();
+  toast(`Buyers: ${created.toLocaleString()} new companies, ${updated.toLocaleString()} existing ones updated, ${deals.toLocaleString()} deals added.`, 8000);
 }
 
 // ---------- Report ----------
@@ -557,6 +691,10 @@ document.addEventListener('click', e => {
   if (x === 'report' && proj) return openValuationReport(proj);
   if (x === 'moretx') { cf.limit += 300; return renderComps(); }
   if (x === 'exporttx') return exportFilteredTx();
+  if (x === 'mastertx') return exportMasterTx();
+  const src = e.target.closest('[data-csrc-del]')?.dataset.csrcDel;
+  if (src) return removeSource(src);
+  if (x === 'buyers') return addBuyersToCompanies();
   if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', limit: 200, open: null }); return renderComps(); }
   if (e.target.closest('#compsView')) {
     if (e.target.closest('[data-open]')) return;
