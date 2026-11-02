@@ -328,7 +328,9 @@ function compareTx(profile, t, prep) {
   const tw = words(text);
   const shared = [...prep.words].filter(w => tw.has(w));
   const cos = prep.words.size && tw.size ? Math.min(1, (shared.length / Math.sqrt(prep.words.size * tw.size)) * 2.5) : 0;
-  const textScore = Math.max(prep.phrases.length ? hits.length / Math.min(3, prep.phrases.length) : 0, cos);
+  // A tag or keyword phrase found verbatim is strong evidence: one hit counts half, two hits full; overlapping words add a little on top.
+  const hitScore = prep.phrases.length ? Math.min(1, hits.length / Math.min(2, prep.phrases.length)) : 0;
+  const textScore = Math.min(1, Math.max(hitScore, cos) + 0.25 * Math.min(hitScore, cos));
   const ind = String(t.industry || '').toLowerCase();
   const indScore = prep.segments.some(s => ind.includes(s)) ? 1 : prep.segments.some(s => s.split(' ').some(w => w.length > 4 && ind.includes(w))) ? 0.5 : 0;
   let sizeScore = 0.4, sizeWhy = '';
@@ -480,7 +482,8 @@ function renderValuationTab(proj, el) {
 }
 
 // ---------- Rendering: Comps page ----------
-const cf = { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', status: 'live', withMult: false, sort: 'date', limit: 200, open: null };
+const cf = { view: 'db', q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', status: 'live', withMult: false, sort: 'date', limit: 200, open: null };
+const compsTabs = () => `<div class="seg-tabs"><button class="${cf.view !== 'set' ? 'on' : ''}" data-cview="db">Transaction database</button><button class="${cf.view === 'set' ? 'on' : ''}" data-cview="set">Value a company</button></div>`;
 const med = arr => percentile(arr, 0.5);
 const splitBuyers = s => String(s || '').split(/;\s*/).map(b => b.replace(/\s*\([^()]*:[^()]*\)\s*$/, '').trim()).filter(Boolean);
 const FIN_BUYER = /capital|partners|equity|private|fund|ventures|investment|investors|holdings? (llc|lp)|l\.?p\.?$|advisors|management (llc|lp)/i;
@@ -553,6 +556,7 @@ function renderComps() {
         <li>Export to Excel and import here (several files at once is fine). Columns are recognised automatically, S&P Capital IQ Pro field codes too; where the financials are missing, multiples are read from the deal summary. Re-importing updates instead of duplicating.</li></ol></div>`;
     return;
   }
+  if (cf.view === 'set') return renderCompSet();
   const list = filteredTx();
   const s1 = stat(list.map(t => t.ev_revenue).filter(x => x != null)), s2 = stat(list.map(t => t.ev_ebitda).filter(x => x != null));
   const sizes = list.map(t => t.deal_value).filter(x => x > 0);
@@ -568,7 +572,7 @@ function renderComps() {
   const th = (k, label) => `<th class="num sortable ${cf.sort === k ? 'on' : ''}" data-csort="${k}">${label}${cf.sort === k ? ' ↓' : ''}</th>`;
 
   $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
-      <div class="actions"><button class="btn" data-vx="buyers" title="Create a company for every acquirer, with its deal history">Add buyers to Companies</button><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
+      <div class="actions">${compsTabs()}<button class="btn" data-vx="buyers" title="Create a company for every acquirer, with its deal history">Add buyers to Companies</button><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
         <label class="btn primary">Import transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
     <div class="filters">
       <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
@@ -588,6 +592,10 @@ function renderComps() {
     </div>
     <div class="comps-grid">
       <div class="card span2"><h2>Deal activity and multiples by year</h2>${yearChart(list)}</div>
+      ${(() => { const pts = list.filter(t => t.ev_revenue && t.deal_value > 0).slice(0, 1500).map(t => ({ x: t.deal_value, y: t.ev_revenue, on: true, label: `${t.target} (${t.year || ''}) · ${mult(t.ev_revenue)} · $${usdm(t.deal_value)}` }));
+        const evr = list.map(t => t.ev_revenue).filter(v => v != null), eve = list.map(t => t.ev_ebitda).filter(v => v != null);
+        return `<div class="card"><h2>EV/Revenue vs deal size</h2>${csScatter(pts, { refY: s1.median })}${pts.length === 1500 ? '<div class="muted small">Newest 1,500 deals with both figures.</div>' : ''}</div>
+          <div class="card"><h2>Distribution of multiples</h2>${csHist(evr)}${eve.length >= 3 ? csHist(eve, { step: 4, max: 40, label: 'EV / EBITDA' }) : ''}</div>`; })()}
       <div class="card"><h2>By industry</h2>${segTable(industries, 'data-cind', cf.industry)}</div>
       <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
         <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
@@ -754,7 +762,9 @@ document.addEventListener('click', e => {
   if (src) return removeSource(src);
   if (x === 'buyers') return addBuyersToCompanies();
   if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', limit: 200, open: null }); return renderComps(); }
-  if (e.target.closest('#compsView')) {
+  const cview = e.target.closest('[data-cview]')?.dataset.cview;
+  if (cview) { cf.view = cview; return renderComps(); }
+  if (e.target.closest('#compsView') && cf.view !== 'set') {
     if (e.target.closest('[data-open]')) return;
     const el = s => e.target.closest(`[${s}]`)?.getAttribute(s);
     const toggle = (k, v) => { cf[k] = cf[k] === v ? '' : v; cf.limit = 200; renderComps(); };

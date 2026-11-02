@@ -189,5 +189,53 @@ If the name is ambiguous, use the website and country to pick the right company,
     return c;
   }
 
-  return { MODELS, DEFAULT_MODEL, ROLE_TAGS, research, apply };
+  // Quick profile of a company being valued, read from its own website (comp set builder). Cheap: a few page fetches, no people or deals.
+  const TARGET_TOOL = {
+    name: 'save_target',
+    description: 'Save the company profile read from the website. Call this exactly once. Use empty strings for anything the pages do not show.',
+    strict: true,
+    input_schema: {
+      type: 'object', additionalProperties: false,
+      required: ['name', 'website', 'short_description', 'description', 'tags', 'sector', 'subsector', 'country', 'business_model', 'customers', 'employees', 'founded', 'notes'],
+      properties: {
+        name: str, website: str,
+        short_description: { type: 'string', description: 'One sentence' },
+        description: { type: 'string', description: '3-5 sentences: products, customers, verticals, geography, business model' },
+        tags: { type: 'string', description: '6-12 semicolon-separated topic tags as an M&A database would use them, e.g. "Vertical SaaS; Field Service Management; Construction Software; Workflow Automation"' },
+        sector: str, subsector: str, country: { type: 'string', description: 'HQ country' },
+        business_model: { type: 'string', enum: ['SaaS', 'Licence + maintenance', 'Services / IT', 'Marketplace / platform', 'Hardware + software', 'Mixed', 'unknown'] },
+        customers: { type: 'string', description: 'Customer segments and verticals, e.g. "Mid-sized logistics companies in the Benelux"' },
+        employees: { type: 'string', description: 'Only if the site states it' },
+        founded: { type: 'string', description: 'Year, only if stated' },
+        notes: str,
+      },
+    },
+  };
+
+  async function readWebsite(url, { apiKey, model = DEFAULT_MODEL, signal } = {}) {
+    const anthropic = getClient(apiKey);
+    const m = MODELS[model] ? model : DEFAULT_MODEL;
+    const site = /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    const messages = [{ role: 'user', content: `Read the website ${site} (home page plus the most useful product / about pages) and profile this company for a comparable-transactions analysis. Base everything on what the pages say; use web search only if the site cannot be read. Then call save_target.` }];
+    let usd = 0;
+    for (let turn = 0; turn < 5; turn++) {
+      const params = {
+        model: m, max_tokens: 16000, output_config: { effort: 'low' },
+        system: 'You are an M&A analyst. Be factual and concise; do not invent figures.',
+        tools: [{ type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 4 }, { type: 'web_search_20260209', name: 'web_search', max_uses: 2 }, TARGET_TOOL],
+        messages,
+      };
+      if (MODELS[m].fallback) Object.assign(params, { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
+      const msg = await anthropic.beta.messages.stream(params, { signal }).finalMessage();
+      usd += cost(m, msg.usage || {}).usd;
+      if (msg.stop_reason === 'refusal') throw new Error('Claude declined to read this website.');
+      const call = msg.content.find(b => b.type === 'tool_use' && b.name === 'save_target');
+      if (call) return { profile: call.input, usd };
+      messages.push({ role: 'assistant', content: msg.content });
+      if (msg.stop_reason !== 'pause_turn') messages.push({ role: 'user', content: 'Please call save_target now with what you found.' });
+    }
+    throw new Error('No profile returned.');
+  }
+
+  return { MODELS, DEFAULT_MODEL, ROLE_TAGS, research, apply, readWebsite };
 })();

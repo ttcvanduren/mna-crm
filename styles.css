@@ -282,6 +282,30 @@ span.grade { cursor: default; color: #fff; border: 0; }
 .yr-c { font-size: 11px; color: var(--muted); }
 .legend { margin-top: 6px; display: flex; align-items: center; gap: 6px; }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+/* Comp set builder */
+.seg-tabs { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; margin-right: 6px; }
+.seg-tabs button { font: inherit; font-size: 13px; padding: 6px 12px; border: 0; background: var(--card); color: var(--muted); cursor: pointer; }
+.seg-tabs button.on { background: var(--accent); color: #fff; }
+.cs-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 16px; margin-bottom: 16px; }
+@media (max-width: 1100px) { .cs-grid { grid-template-columns: 1fr; } }
+.cs-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 10px; margin: 10px 0; }
+.cs-fields label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.cs-fields label.wide { grid-column: 1 / -1; }
+.cs-fields input, .cs-fields select, .cs-fields textarea { font: inherit; font-size: 13px; color: var(--text); }
+.cs-fields textarea { resize: vertical; }
+.cs-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.cs-tags .chip .link { padding: 0 0 0 2px; font-weight: 700; }
+.cs-note { background: var(--accent-soft); border-radius: 8px; padding: 6px 10px; margin-top: 8px; font-size: 13px; }
+.cs-filters { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.cs-filters .wide { flex-basis: 100%; }
+.cs-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .cs-two { grid-template-columns: 1fr; } }
+.cs-val { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+.cs-val td:nth-child(2) { white-space: nowrap; }
+.cs-svg { max-width: 100%; height: auto; display: block; }
+.cs-svg circle[data-cs-pt]:hover { stroke-width: 3; }
+.cs-table td.cs-out { color: var(--warn); text-decoration: line-through; }
+.sw.b { background: #1d4ed8; }
 .seg tr[data-cind], .seg tr[data-creg] { cursor: pointer; }
 .seg tr:hover td, .seg tr.on td { background: #f5f8ff; }
 .seg-l { font-weight: 500; }
