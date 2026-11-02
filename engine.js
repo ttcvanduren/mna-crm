@@ -6,7 +6,7 @@ const Engine = (() => {
     { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund'] },
     { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site', 'companywebsite', 'webadres'] },
     { key: 'linkedin_url', label: 'LinkedIn page', aliases: ['companylinkedin', 'linkedinpage', 'linkedincompany', 'linkedincompanypage', 'companylinkedinurl'] },
-    { key: 'role', label: 'Role (Target / Buyer / Investor)', aliases: ['role', 'type', 'buyertype', 'rol'] },
+    { key: 'role', label: 'Type (Strategic / Financial / Target)', aliases: ['role', 'type', 'buyertype', 'rol'] },
     { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
     { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
     { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry', 'companycountry'] },
@@ -293,6 +293,23 @@ const Engine = (() => {
   }
 
   const splitList = s => norm(s).split(/[;,|/]+/).map(lower).filter(Boolean);
+
+  // Every buy-side company is either Financial (PE, VC, investment firms; stored as 'Investor') or Strategic ('Buyer').
+  const FIN_SECTOR = /private equity|venture capital|asset management|investment bank|diversified financial|capital markets|investment firm|family office/i;
+  const FIN_SELF = /\b(is|are|operates as)\s+an?\s+([\w&-]+\s+){0,3}(private equity|venture capital|growth equity|buyout|investment|asset management|family office|holding company that invests)\b/i;
+  const FIN_NAME = /\w*capital\w*|\b(partners|equity|ventures?|investments?|investors?|invest|advisers|beteiligung\w*|participations?)\b/i;
+  // Markers that always mean a fund or institution, even next to words like "Technology" (e.g. "Investcorp Technology Partners IV L.P.").
+  const FUND_MARK = /\b(fund|fonds|funds|private equity|pension|teachers|sovereign|investment (authority|corporation|board)|sgr|fpci|fcpi?|scr|sicav|limited partnership)\b|\bl\.?\s?l?\.?p\.?$|\b(i{1,3}|iv|vi{0,3}|ix|xi{0,3}|xiv|xvi{0,3})(,? l\.?p\.?)?$/i;
+  const PE_FIRMS = /^(eqt|triton|hellman & friedman|hg\b|hgcapital|thoma bravo|vista equity|kkr|carlyle|blackstone|bain capital|advent international|permira|cinven|cvc\b|apax|ta associates|silver lake|warburg pincus|general atlantic|insight (venture )?partners|summit partners|francisco partners|marlin equity|accel-kkr|psg\b|main capital|nordic capital|altor|verdane|waterland|gilde|bregal|ik (partners|investment)|ardian|eurazeo|keensight|gic\b|temasek|cpp investments|canada pension|ontario teachers|abu dhabi investment|mubadala|capman|sagard|partners group|bridgepoint|inflexion|livingbridge|riverside company|the riverside company|clearlake|genstar|symphony technology group|golden gate capital|providence equity|tpg\b|investcorp|hamilton lane|montagu|equistone|hig capital|h\.i\.g\.|one equity|battery ventures|ldc\b|maven capital|mml capital|five arrows|hayfin|eurazeo|tikehau|astorg|hellman)/i;
+  const OPERATING = /software|systems|technolog|solutions|digital|data|cloud|labs?\b|consult|telecom|networks|services/i;
+  function guessRole(c) {
+    const name = String(c.name || '');
+    if (FIN_SECTOR.test([c.sector, c.subsector].join(' '))) return 'Investor';
+    if (FIN_SELF.test(String(c.short_description || '') + ' ' + String(c.description || '').slice(0, 300))) return 'Investor';
+    if (PE_FIRMS.test(name) || FUND_MARK.test(name)) return 'Investor';
+    if (FIN_NAME.test(name) && !OPERATING.test(name)) return 'Investor';
+    return 'Buyer';
+  }
 
   function normaliseRole(r) {
     const s = lower(r);
@@ -606,7 +623,7 @@ const Engine = (() => {
     if (cs && dealWants.some(w => sameish(w, cs) || sameish(w, cSub))) return [1, `${cand.sector} is in deal focus`];
     if (ds && cs && ds === cs) return dSub && cSub && dSub === cSub ? [1, `Same sub-sector: ${cand.subsector}`] : [0.85, `Same sector: ${cand.sector}`];
     if (sameish(ds, cs) || (dSub && sameish(dSub, cSub))) return [0.6, `Related sector: ${cand.sector}`];
-    const dSeg = segments(deal.sector + '/' + (deal.subsector || '')), cSeg = segments(cand.sector + '/' + (cand.subsector || ''));
+    const dSeg = segments((deal.sector || '') + '/' + (deal.subsector || '')), cSeg = segments((cand.sector || '') + '/' + (cand.subsector || ''));
     const segHit = dSeg.find(a => cSeg.some(b => a === b || (a.length > 4 && b.length > 4 && sameish(a, b))));
     if (segHit) return [0.75, `Same segment: ${segHit.toUpperCase().length <= 4 ? segHit.toUpperCase() : segHit}`];
     const dt = new Set(ds.split(/\W+/).filter(t => t.length > 3 && !GENERIC.has(t))), overlap = cs.split(/\W+/).filter(t => dt.has(t));
@@ -655,12 +672,23 @@ const Engine = (() => {
     return [Math.max(0, ratio - 0.3), null];
   }
 
+  function acquiredPhrases(deal, cand) {
+    if (!cand.acquisitions?.length) return [];
+    const phrases = [...new Set(splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p)))];
+    const text = ' ' + lower(cand.acquisitions.map(a => [a.industry, a.tags, a.description].join(' ')).join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+    return phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
+  }
+
   function keywordScore(dealTokens, cand, deal) {
     const [ps, hits] = phraseScore(deal, cand);
     const ct = tokens(cand);
     const shared = dealTokens.size && ct.size ? [...dealTokens].filter(t => ct.has(t)) : [];
     const sim = shared.length ? Math.min(1, (shared.length / Math.sqrt(dealTokens.size * ct.size)) * 2.5) : 0;
     if (hits.length && ps >= sim * 0.8) return [Math.max(ps, sim), `Matches: ${hits.slice(0, 4).join(', ')}`];
+    // Buyers known only from transaction data: what they acquired describes their interest.
+    const bought = acquiredPhrases(deal, cand);
+    const boughtScore = Math.min(0.8, (bought.length / Math.min(3, splitList(deal.keywords).length || 1)) * 0.8);
+    if (bought.length && boughtScore > sim * 0.8) return [boughtScore, `Acquired in: ${bought.slice(0, 3).join(', ')}`];
     if (!shared.length) return [0, null];
     return [sim * 0.8, `Keywords: ${shared.slice(0, 4).join(', ')}`];
   }
@@ -749,7 +777,8 @@ const Engine = (() => {
         let sum = 0;
         for (const [k, [v]] of Object.entries(parts)) sum += v * Number(weights[k] || 0);
         // Without any business fit, geography or appetite alone shouldn't make a good match.
-        if (parts.sector[0] === 0 && parts.keywords[0] < 0.2) sum *= 0.4;
+        // A buyer that already acquired in the deal's space has a business fit, even without a description of its own.
+        if (parts.sector[0] === 0 && parts.keywords[0] < 0.2 && !/^Bought /.test(parts.appetite[1] || '')) sum *= 0.4;
         return { company: c, score: Math.round((sum / totalW) * 100), reasons: Object.values(parts).map(p => p[1]).filter(Boolean) };
       })
       .sort((a, b) => b.score - a.score);
@@ -776,7 +805,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, guessRole, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

@@ -280,6 +280,8 @@ async function importTransactionFiles(files) {
   await saveTransactions();
   renderComps();
   toast(`Transactions: ${added.toLocaleString()} new, ${updated.toLocaleString()} merged into deals you already had.`, 8000);
+  // Keep Companies in step with the transactions, so Find buyers sees every acquirer.
+  await addBuyersToCompanies();
 }
 
 // ---------- Similarity ----------
@@ -616,7 +618,7 @@ function buyerGroups() {
       if (parts.length === 1) { b.country ||= t.buyer_country; b.industry ||= t.buyer_industry; b.description ||= t.buyer_description; }
     }
   }
-  for (const b of g.values()) b.role = FIN_BUYER.test(b.name) || /asset management|investment banking|diversified financial/i.test(b.industry || '') ? 'Investor' : 'Buyer';
+  for (const b of g.values()) b.role = Engine.guessRole({ name: b.name, sector: b.industry, description: b.description });
   return [...g.values()].sort((a, b) => b.deals.length - a.deals.length);
 }
 const acqFromTx = t => ({
@@ -629,7 +631,7 @@ const acqFromTx = t => ({
 async function addBuyersToCompanies() {
   const groups = buyerGroups();
   const counts = [1, 2, 3, 5, 10].map(n => `   ${n}+ deals: ${groups.filter(g => g.deals.length >= n).length.toLocaleString()} buyers`).join('\n');
-  const ans = prompt(`Add the acquirers from your transactions to Companies, each with its full deal history (target, date, industry, size, multiples, topic tags and the deal summary). Existing companies with the same name get the deals added; nothing is overwritten.\n\n${counts}\n\nMinimum number of deals per buyer:`, '1');
+  const ans = prompt(`Add the acquirers from your transactions to Companies, each with its full deal history (target, date, industry, size, multiples, topic tags and the deal summary). Existing companies with the same name get the deals added; nothing is overwritten. Each one is typed Strategic or Financial automatically.\n\n${counts}\n\nMinimum number of deals per buyer (Cancel = skip):`, '1');
   if (ans == null) return;
   const min = Math.max(1, parseInt(ans, 10) || 1), pick = groups.filter(g => g.deals.length >= min);
   toast(`Adding ${pick.length.toLocaleString()} buyers…`);
@@ -641,7 +643,7 @@ async function addBuyersToCompanies() {
     else { const c = newCompany(g.name); state.companies.push(c); targets = [c]; created++; }
     for (const c of targets) {
       const fill = (k, v) => { if (v && !c[k]) c[k] = v; };
-      fill('ticker', g.ticker); fill('country', g.country); fill('sector', g.industry); fill('role', g.role);
+      fill('ticker', g.ticker); fill('country', g.country); fill('sector', g.industry); // the type (strategic / financial) is guessed by touch() once these fields are in
       fill('description', g.description); fill('short_description', g.description && clip(firstSentences(g.description), 240));
       if (g.ticker) fill('ownership', `Listed (${g.ticker})`);
       deals += mergeAcquisitions(c, g.deals.map(acqFromTx));

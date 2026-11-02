@@ -78,7 +78,14 @@ function migrate(c) {
   c.sources ??= [];
   c._norm = Engine.normName(c.name);
   c._domain = Engine.domainOf(c.website);
+  classify(c);
   return c;
+}
+// Every company gets a type. Guessed types (role_auto) are re-guessed as data comes in; a type you set yourself is kept.
+function classify(c) {
+  if (c.role && !c.role_auto) return;
+  c.role = Engine.guessRole(c);
+  c.role_auto = true;
 }
 function newCompany(name) {
   return migrate({ id: uid(), name, created: new Date().toISOString(), status: 'New', contacts: [], projects: [], sources: [] });
@@ -88,7 +95,7 @@ function newCompany(name) {
 const dirty = new Set();
 let flushTimer = null;
 function touch(...cs) {
-  cs.forEach(c => c && dirty.add(c.id));
+  cs.forEach(c => { if (c) { classify(c); dirty.add(c.id); } });
   clearTimeout(flushTimer);
   flushTimer = setTimeout(flush, 500);
 }
@@ -145,7 +152,10 @@ function logo(c, lg) {
   const i = esc(initials(c.name));
   return `<span class="co-logo ${lg ? 'lg' : ''}" data-i="${i}">${d ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=64" alt="" loading="lazy" onerror="this.parentNode.textContent=this.parentNode.dataset.i">` : i}</span>`;
 }
-const roleChip = r => r ? `<span class="chip role-${esc(r)}">${esc(r)}</span>` : '';
+// Stored values stay 'Buyer' / 'Investor'; on screen they're Strategic / Financial.
+const ROLE_LABEL = { Buyer: 'Strategic', Investor: 'Financial' };
+const roleLabel = r => ROLE_LABEL[r] || r;
+const roleChip = r => r ? `<span class="chip role-${esc(r)}">${esc(roleLabel(r))}</span>` : '';
 const money = (c, v) => v == null || v === '' ? '' : `${c.currency && c.currency !== 'EUR' ? c.currency + ' ' : '€'}${Engine.fmt(v)}m`;
 const employeesOf = c => c.linkedin_employees ?? c.employees ?? null;
 const KEY_TAGS = new Set(['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strategy']);
@@ -217,12 +227,12 @@ function renderCompanies() {
 }
 
 function renderFilterOptions() {
-  const fill = (sel, values, all) => {
+  const fill = (sel, values, all, label = v => v) => {
     const cur = $(sel).value;
-    const html = `<option value="">${all}</option>` + values.map(v => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
+    const html = `<option value="">${all}</option>` + values.map(v => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label(v))}</option>`).join('');
     if ($(sel)._html !== html) { $(sel).innerHTML = html; $(sel)._html = html; }
   };
-  fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'All roles');
+  fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'Strategic + financial', roleLabel);
   fill('#filterProject', [...new Set(state.companies.flatMap(c => c.projects.map(p => p.project)).filter(Boolean))].sort(), 'All projects');
   fill('#filterCountry', [...new Set(state.companies.map(c => c.country).filter(Boolean))].sort(), 'All countries');
   fill('#filterSector', [...new Set(state.companies.map(c => c.sector).filter(Boolean))].sort(), 'All sectors');
@@ -848,7 +858,7 @@ const curFile = () => imp.files[imp.fi];
 const includedSheets = () => curFile().sheets.filter(s => s.include);
 const curSheet = () => includedSheets()[imp.si];
 const ROLE_OPTIONS = ['', 'Buyer', 'Investor', 'Target', 'Advisor'];
-const roleSelect = (attr, sel) => `<select ${attr}>${ROLE_OPTIONS.map(r => `<option ${r === sel ? 'selected' : ''} value="${r}">${r || '—'}</option>`).join('')}</select>`;
+const roleSelect = (attr, sel) => `<select ${attr}>${ROLE_OPTIONS.map(r => `<option ${r === sel ? 'selected' : ''} value="${r}">${r ? roleLabel(r) : 'Auto (strategic / financial)'}</option>`).join('')}</select>`;
 
 function renderImport() {
   const file = curFile();
@@ -1057,7 +1067,7 @@ function openEdit(id) {
   const fieldHtml = f => {
     const v = c[f.key] ?? '';
     let input;
-    if (f.key === 'role') input = `<select name="${f.key}">${ROLE_OPTIONS.map(r => `<option ${r === v ? 'selected' : ''}>${r}</option>`).join('')}</select>`;
+    if (f.key === 'role') input = roleSelect(`name="role"`, c.role_auto ? '' : v).replace('Auto (strategic / financial)', `Auto${c.role_auto && v ? ` (now ${roleLabel(v)})` : ''}`);
     else if (f.long) input = `<textarea name="${f.key}" rows="3">${esc(v)}</textarea>`;
     else input = `<input name="${f.key}" value="${esc(v)}" ${f.key === 'name' ? 'required' : ''}>`;
     return `<label class="${f.long ? 'full' : ''}">${esc(f.label)}${input}</label>`;
@@ -1116,7 +1126,10 @@ $('#editDialog').addEventListener('close', () => {
   const contacts = dlg._contacts.filter(x => x.name || x.email).map(x => ({ ...x, email: (x.email || '').toLowerCase(), linkedin: x.linkedin ? Engine.cleanUrl(x.linkedin) : '' }));
   let c = dlg.dataset.id ? byId(dlg.dataset.id) : null;
   if (!c) { c = newCompany(data.name); state.companies.push(c); }
+  const roleBefore = c.role;
   Object.assign(c, data, { contacts });
+  if (!data.role) c.role_auto = true;
+  else if (data.role !== roleBefore) c.role_auto = false;
   migrate(c);
   touch(c);
   renderCompanies();
@@ -1161,7 +1174,7 @@ function renderRoleFilters() {
   const roles = [...new Set(state.companies.map(c => c.role || ''))];
   $('#roleFilters').innerHTML = roles.map(r => {
     const on = !state.roleFilter.size || state.roleFilter.has(r);
-    return `<span class="chip ${on ? 'blue' : 'off'}" data-role="${esc(r)}">${esc(r || 'No role')}</span>`;
+    return `<span class="chip ${on ? 'blue' : 'off'}" data-role="${esc(r)}">${esc(r ? roleLabel(r) : 'No type')}</span>`;
   }).join('');
 }
 $('#roleFilters').addEventListener('click', e => {
