@@ -33,6 +33,8 @@ const TX_RULES = [
   ['revenue', /revenue|sales|turnover/],
   ['ebitda', /ebitda/],
   ['employees', /employee|fte|headcount/],
+  ['summary', /dealsummary|synopsis|transactioncomments|dealcomments/],
+  ['tags', /topictag|^tags|keywords/],
   ['description', /description|overview|businessdesc/],
   ['industry', /industry|sector|classification|vertical/],
   ['country', /country|geographic|location|region|headquarter/],
@@ -45,8 +47,23 @@ const TX_RULES = [
   ['website', /website|url|web/],
   ['target', /target|issuer|company|name/],
 ];
-const TX_LABELS = { id: 'Transaction ID', date: 'Announced', closed: 'Closed', target: 'Target', buyer: 'Buyer', seller: 'Seller', ev: 'EV (m)', deal_value: 'Deal value (m)', revenue: 'Target revenue (m)', ebitda: 'Target EBITDA (m)', employees: 'Employees', ev_revenue: 'EV/Revenue', ev_ebitda: 'EV/EBITDA', ev_ebit: 'EV/EBIT', description: 'Business description', industry: 'Industry', country: 'Country / location', stake: '% acquired', status: 'Status', type: 'Type', consideration: 'Consideration', website: 'Website' };
+const TX_LABELS = { id: 'Transaction ID', date: 'Announced', closed: 'Closed', target: 'Target', buyer: 'Buyer', seller: 'Seller', ev: 'EV (m)', deal_value: 'Deal value (m)', revenue: 'Target revenue (m)', ebitda: 'Target EBITDA (m)', employees: 'Employees', ev_revenue: 'EV/Revenue', ev_ebitda: 'EV/EBITDA', ev_ebit: 'EV/EBIT', description: 'Business description', industry: 'Industry', country: 'Country / location', stake: '% acquired', status: 'Status', type: 'Type', consideration: 'Consideration', website: 'Website', summary: 'Deal summary', tags: 'Topic tags', long_description: 'Long description', region: 'Region', buyer_country: 'Buyer country', buyer_industry: 'Buyer industry', mult_src: 'Multiple source' };
 const hk = h => String(h ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+// S&P Capital IQ Pro exports have a row of field codes (SPTR_…) with labels above it (only for text fields) and periods below.
+const SPG_CODES = { SPTR_TARGET_NAME: 'target', SPTR_MI_TRANSACTION_ID: 'id', SPTR_ANN_DATE: 'date', SPTR_CLOSED_DATE: 'closed', SPTR_COMPLETION_DATE: 'closed', SPTR_TRANSACTION_TYPE: 'type', SPTR_STATUS: 'status', SPTR_TRANSACTION_VALUE: 'deal_value', 324281: 'buyer', 324283: 'seller', SPTR_MI_TARGET_PRIMARY_INDUSTRY: 'industry', 326140: 'region', SPTR_DEAL_SUMMARY: 'summary', SPTR_TARGET_COUNTRY: 'country', SPTR_ACQUIRER_COUNTRY: 'buyer_country', SPTR_SNL_TOTAL_REV: 'revenue', SPTR_SNL_EBITDA: 'ebitda' };
+const SPG_LABELS = [['description', /^business description.*target/], ['long_description', /^long business description.*target/], ['tags', /topic tags.*target/], ['industry', /primary industry.*target/], ['buyer_industry', /primary industry.*buyer/]];
+function spgLayout(rows) {
+  const ci = rows.slice(0, 15).findIndex(r => r.some(v => /^SPTR_/.test(String(v))));
+  if (ci < 0) return null;
+  const codes = rows[ci], labels = rows[ci - 1] || [], map = codes.map(() => null), taken = new Set();
+  const headers = codes.map((c, i) => norm(labels[i]).replace(/\s+/g, ' ') || String(c));
+  codes.forEach((c, i) => {
+    const f = SPG_CODES[String(c).trim()] || SPG_LABELS.find(([, re]) => re.test(headers[i].toLowerCase()))?.[0];
+    if (f && !taken.has(f)) { map[i] = f; taken.add(f); }
+  });
+  return { header: ci + 1, headers, map };
+}
 
 function mapTxHeaders(headers) {
   const out = headers.map(() => null), taken = new Set();
@@ -70,6 +87,7 @@ const validMult = (x, lo, hi) => (x != null && isFinite(x) && x >= lo && x <= hi
 const yearOf = t => +String(t.date || t.closed || '').slice(0, 4) || null;
 // Capital IQ is US-based: text dates are month/day/year unless the first number can only be a day.
 function txDate(v) {
+  if (/^\d{5}(\.\d+)?$/.test(String(v ?? '').trim())) return Engine.parseDate(Number(v)); // Excel serial date
   const m = String(v ?? '').trim().match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})/);
   if (!m) return Engine.parseDate(v);
   let [a, b] = [+m[1], +m[2]];
@@ -78,26 +96,87 @@ function txDate(v) {
 }
 // "Germany (Primary); Austria" -> "Germany"
 const cleanCountry = s => String(s || '').split(/[;|]/)[0].replace(/\(.*?\)/g, '').trim();
+// S&P wraps values as "Company (value)"; tags and buyer industries are "A (x); A (y)".
+const unwrapOwn = (s, name) => (name && s.startsWith(name + ' (') && s.endsWith(')') ? s.slice(name.length + 2, -1) : s);
+const lastParens = s => String(s).split(/;\s*/).map(p => p.match(/\(([^()]*)\)\s*$/)?.[1] || p).filter(Boolean);
+const clip = (s, n) => (s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s);
+
+// ---------- Financials from the deal summary (S&P/Capital IQ deal text) ----------
+// Approximate USD rates; only used when the deal text and the USD transaction value are in different currencies.
+const FX = { USD: 1, EUR: 1.1, GBP: 1.27, CAD: 0.74, AUD: 0.66, NZD: 0.6, SEK: 0.095, NOK: 0.093, DKK: 0.147, CHF: 1.1, JPY: 0.0075, INR: 0.012, KRW: 0.00078, SGD: 0.74, HKD: 0.128, CNY: 0.145, BRL: 0.2, ZAR: 0.057, PLN: 0.25, ILS: 0.28, MXN: 0.053, TWD: 0.032, MYR: 0.23, THB: 0.029, IDR: 0.000066, PHP: 0.018, TRY: 0.05, AED: 0.27, SAR: 0.27, CZK: 0.044, HUF: 0.0029, RON: 0.22 };
+const CUR_RE = '(US\\$|C\\$|A\\$|NZ\\$|HK\\$|S\\$|R\\$|€|\\$|£|¥|₹|₩|EUR|USD|GBP|CAD|AUD|SEK|NOK|DKK|CHF|JPY|INR|KRW|SGD|HKD|CNY|RMB|BRL|ZAR|PLN|NZD|ILS|MXN|TWD|MYR|THB|IDR|PHP|TRY|AED|SAR|CZK|HUF|RON|Rs\\.?|NIS)';
+const AMT_RE = CUR_RE + '\\s?(\\d[\\d,]*(?:\\.\\d+)?)\\s?(billion|million|thousand|crores?|lakhs?|mn|bn|m|b|k|cr)?\\b';
+const SCALE = { billion: 1e3, bn: 1e3, b: 1e3, million: 1, mn: 1, m: 1, thousand: 1e-3, k: 1e-3, crore: 10, crores: 10, cr: 10, lakh: 0.1, lakhs: 0.1 };
+const CUR_ALIAS = { 'us$': 'USD', $: 'USD', 'c$': 'CAD', 'a$': 'AUD', 'nz$': 'NZD', 'hk$': 'HKD', 's$': 'SGD', 'r$': 'BRL', '€': 'EUR', '£': 'GBP', '¥': 'JPY', '₹': 'INR', '₩': 'KRW', rmb: 'CNY', rs: 'INR', 'rs.': 'INR', nis: 'ILS' };
+const amount = (c, n, s) => ({ cur: CUR_ALIAS[c.toLowerCase()] || c.toUpperCase(), v: parseFloat(n.replace(/,/g, '')) * (s ? SCALE[s.toLowerCase()] : 1e-6) });
+const sentencesOf = t => t.replace(/(\d)\.(\d)/g, '$1§$2').split(/(?<=[.!?])\s+|\n+/).map(s => s.replace(/§/g, '.'));
+const firstWord = s => String(s || '').split(/\s+/)[0].toLowerCase().replace(/[^a-z0-9]/g, '');
+
+function mineSummary(t) {
+  const text = String(t.summary || ''), ss = sentencesOf(text), out = {};
+  const tgt = firstWord(t.target), buyer = firstWord(t.buyer);
+  // 1. Multiples stated in the text ("7x EBITDA", "EV/FY25 adjusted EBITDA multiple of 6.5x", "3.5x the ARR").
+  for (const s of ss) {
+    if (/option|earn-?out|expected to grow|market (is|size)/i.test(s)) continue;
+    let x, k, m = s.match(/(\d+(?:\.\d+)?)\s?(?:x|times)\s+(?:the\s+|its\s+|of\s+)?(?:[\w'’()-]+\s+){0,5}?(EBITDA|EBIT\b|ARR|recurring revenues?|revenues?|sales|turnover)/i);
+    if (m) [x, k] = [+m[1], m[2]];
+    else if ((m = s.match(/(?:EV|TEV|enterprise value)\s*\/\s*(?:[\w'’-]+\s+){0,4}?(EBITDA|EBIT\b|revenues?|sales)[^.]{0,40}?(\d+(?:\.\d+)?)\s?x/i))) [x, k] = [+m[2], m[1]];
+    if (!m) continue;
+    k = k.toLowerCase();
+    if (k.startsWith('ebitda')) out.ev_ebitda ??= x;
+    else if (k !== 'ebit' && out.ev_revenue == null) { out.ev_revenue = x; out.rev_kind = /arr|recurring/.test(k) ? 'ARR' : 'revenue'; }
+  }
+  // 2. Enterprise value, revenue and EBITDA amounts; skip sentences about the buyer.
+  const evM = text.match(new RegExp('enterprise value (?:of |is |at |was )?(?:approximately |about |around )?' + AMT_RE, 'i'));
+  const ev = evM && amount(evM[1], evM[2], evM[3]);
+  let rev = null, ebitda = null;
+  for (const s of ss) {
+    const low = s.toLowerCase();
+    if (buyer.length > 2 && low.includes(buyer) && !(tgt.length > 2 && low.includes(tgt))) continue;
+    if (!rev) { const m = s.match(new RegExp('(?:revenues?|sales|turnover)\\s+(?:of|was|were|amounted to|totaled|totalled|reached|stood at|in excess of|exceeding)\\s+(?:approximately |about |around |over |more than )?' + AMT_RE, 'i')); if (m) rev = amount(m[1], m[2], m[3]); }
+    if (!ebitda) { const m = s.match(new RegExp('EBITDA\\s+(?:of|was|were|amounted to|totaled|totalled|stood at)\\s+(?:approximately |about |around )?(-\\s?|negative )?' + AMT_RE, 'i')); if (m && !m[1]) ebitda = amount(m[2], m[3], m[4]); }
+  }
+  const usd = a => (a && FX[a.cur] ? a.v * FX[a.cur] : null);
+  const evUsd = usd(ev) ?? t.deal_value;
+  if (rev && usd(rev)) { out.revenue = usd(rev); out.ev_revenue ??= ev && ev.cur === rev.cur ? ev.v / rev.v : evUsd / out.revenue; }
+  if (ebitda && usd(ebitda)) { out.ebitda = usd(ebitda); out.ev_ebitda ??= ev && ev.cur === ebitda.cur ? ev.v / ebitda.v : evUsd / out.ebitda; }
+  if (ev && usd(ev)) out.ev = usd(ev);
+  return out;
+}
 
 function rowToTx(row, map, file, currency) {
   const t = { source: file, currency };
   map.forEach((f, i) => {
     if (!f) return;
     const v = row[i];
-    if (v === '' || v == null) return;
+    if (v === '' || v == null || v === 'NA') return;
     if (['ev', 'deal_value', 'revenue', 'ebitda', 'employees', 'ev_revenue', 'ev_ebitda', 'ev_ebit', 'stake'].includes(f)) t[f] = num(v);
     else if (f === 'date' || f === 'closed') t[f] = txDate(v);
-    else if (f === 'country') t[f] = cleanCountry(v);
+    else if (f === 'country' || f === 'buyer_country') t[f] = cleanCountry(v);
     else t[f] = norm(v);
   });
   if (!t.target) return null;
+  // Compact the long S&P text fields so thousands of deals stay small.
+  if (t.description) t.description = clip(unwrapOwn(t.description, t.target), 500);
+  if (t.long_description) { if (!t.description) t.description = clip(unwrapOwn(t.long_description, t.target), 500); delete t.long_description; }
+  if (t.tags) t.tags = [...new Set(t.tags.split(/;\s*/).flatMap(p => (p.startsWith(t.target + ' (') ? [unwrapOwn(p, t.target)] : lastParens(p))))].join(', ');
+  if (t.buyer_industry) t.buyer_industry = [...new Set(lastParens(t.buyer_industry))].join(', ');
+  if (/\(/.test(t.industry || '')) t.industry = lastParens(t.industry)[0];
   // Fill multiples from EV and financials where the export didn't include them; drop implausible values.
   const ev = t.ev ?? (t.deal_value != null && (t.stake == null || t.stake >= 95) ? t.deal_value : null);
   if (t.ev_revenue == null && ev && t.revenue > 0) t.ev_revenue = ev / t.revenue;
   if (t.ev_ebitda == null && ev && t.ebitda > 0) t.ev_ebitda = ev / t.ebitda;
-  t.ev_revenue = validMult(t.ev_revenue, 0.1, 40);
-  t.ev_ebitda = validMult(t.ev_ebitda, 1, 80);
+  if (t.summary && (t.ev_revenue == null || t.ev_ebitda == null)) {
+    const m = mineSummary(t);
+    for (const k of ['revenue', 'ebitda', 'ev']) if (t[k] == null && m[k] != null) t[k] = Math.round(m[k] * 100) / 100;
+    if (t.ev_revenue == null && m.ev_revenue != null) { t.ev_revenue = m.ev_revenue; t.mult_src = m.rev_kind === 'ARR' ? 'ARR multiple from deal text' : 'from deal text'; }
+    if (t.ev_ebitda == null && m.ev_ebitda != null) { t.ev_ebitda = m.ev_ebitda; t.mult_src ??= 'from deal text'; }
+  }
+  if (t.summary) t.summary = clip(t.summary, 700);
+  t.ev_revenue = validMult(t.ev_revenue, 0.15, 30);
+  t.ev_ebitda = validMult(t.ev_ebitda, 2, 60);
   t.ev_ebit = validMult(t.ev_ebit, 1, 120);
+  if (t.ev_revenue == null && t.ev_ebitda == null) delete t.mult_src;
   if (t.ev == null && ev != null) t.ev = ev;
   t.year = yearOf(t);
   t.key = t.id || `${Engine.normName(t.target)}|${t.year || ''}|${Engine.normName(t.buyer || '')}`;
@@ -112,21 +191,23 @@ async function importTransactionFiles(files) {
       for (const name of wb.SheetNames) {
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: true, defval: '', blankrows: false });
         if (rows.length < 2) continue;
-        const h = detectTxHeaderRow(rows);
-        const headers = rows[h].map(v => norm(v));
-        const map = mapTxHeaders(headers);
+        const spg = spgLayout(rows);
+        const h = spg ? spg.header : detectTxHeaderRow(rows);
+        const headers = spg ? spg.headers : rows[h].map(v => norm(v));
+        const map = spg ? spg.map : mapTxHeaders(headers);
         if (!map.includes('target')) continue;
         const title = rows.slice(0, h + 1).flat().join(' ');
-        const currency = /usd|\$/i.test(title) ? 'USD' : /gbp|£/i.test(title) ? 'GBP' : /eur|€/i.test(title) ? 'EUR' : 'USD';
+        const currency = spg || /usd|\$/i.test(title) ? 'USD' : /gbp|£/i.test(title) ? 'GBP' : /eur|€/i.test(title) ? 'EUR' : 'USD';
         const txs = rows.slice(h + 1).map(r => rowToTx(r, map, f.name, currency)).filter(Boolean);
         incoming.push(...txs);
-        report.push({ file: f.name, sheet: name, rows: txs.length, map: headers.map((x, i) => map[i] ? `${x} → ${TX_LABELS[map[i]]}` : null).filter(Boolean), ignored: headers.filter((x, i) => x && !map[i]) });
+        report.push({ file: f.name, sheet: name, rows: txs.length, mined: txs.filter(t => t.mult_src).length, map: headers.map((x, i) => map[i] ? `${x} → ${TX_LABELS[map[i]]}` : null).filter(Boolean), ignored: [...new Set(headers.filter((x, i) => x && !map[i]))] });
       }
     } catch (err) { toast(`Could not read ${f.name}: ${err.message}`, 7000); }
   }
   if (!incoming.length) return toast('No transactions found. The sheet needs at least a target/company column.', 7000);
-  const preview = report.map(r => `${r.file} › ${r.sheet}: ${r.rows} rows\n   ${r.map.join('\n   ')}${r.ignored.length ? `\n   ignored: ${r.ignored.join(', ')}` : ''}`).join('\n\n');
-  if (!confirm(`Import ${incoming.length} transactions?\n\n${preview.slice(0, 2500)}`)) return;
+  const preview = report.map(r => `${r.file} › ${r.sheet}: ${r.rows} rows${r.mined ? ` (${r.mined} with a multiple read from the deal summary)` : ''}\n   ${r.map.join('\n   ')}${r.ignored.length ? `\n   ignored: ${r.ignored.join(', ').replace(/\n/g, ' ')}` : ''}`).join('\n\n');
+  const withMult = incoming.filter(t => t.ev_revenue || t.ev_ebitda).length;
+  if (!confirm(`Import ${incoming.length.toLocaleString()} transactions (${withMult.toLocaleString()} with EV/Revenue or EV/EBITDA)?\n\n${preview.slice(0, 2500)}`)) return;
   const byKey = new Map(state.transactions.map(t => [t.key, t]));
   let added = 0, updated = 0;
   for (const t of incoming) {
@@ -146,9 +227,13 @@ const words = s => new Set(String(s || '').toLowerCase().split(/[^a-z0-9à-ÿ]+/
 const phrasesOf = s => [...new Set(String(s || '').toLowerCase().split(/[;,|/]+/).map(x => x.trim()).filter(x => x.length > 2 && !STOP.has(x)))];
 const REGION_OF = c => Engine.regionOf({ country: c }) || (/europe/i.test(c || '') ? 'Europe' : /america|united states|usa|canada/i.test(c || '') ? 'North America' : '');
 const EUROPE = new Set(['Benelux', 'DACH', 'UK & Ireland', 'Nordics', 'France', 'Southern Europe', 'CEE', 'Europe']);
+const txRegion = t => REGION_OF(t.country) || (/united states|canada/i.test(t.region || '') ? 'North America' : t.region || '');
+const isDead = t => /terminat|withdrawn|cancel|lapsed/i.test(t.status || '');
+// One region label per deal for filters and charts: Europe, North America, Asia-Pacific, …
+const bigRegion = t => { const r = txRegion(t); return EUROPE.has(r) ? 'Europe' : r || 'Other'; };
 
 function compareTx(profile, t, prep) {
-  const text = ' ' + [t.description, t.industry, t.target].join(' ').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+  const text = ' ' + [t.description, t.tags, t.industry, t.target].join(' ').toLowerCase().replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
   const hits = prep.phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
   const tw = words(text);
   const shared = [...prep.words].filter(w => tw.has(w));
@@ -157,12 +242,15 @@ function compareTx(profile, t, prep) {
   const ind = String(t.industry || '').toLowerCase();
   const indScore = prep.segments.some(s => ind.includes(s)) ? 1 : prep.segments.some(s => s.split(' ').some(w => w.length > 4 && ind.includes(w))) ? 0.5 : 0;
   let sizeScore = 0.4, sizeWhy = '';
-  if (profile.revenue > 0 && t.revenue > 0) { const r = Math.abs(Math.log(profile.revenue / t.revenue)); sizeScore = Math.max(0, 1 - r / Math.log(10)); if (sizeScore > 0.6) sizeWhy = `similar size (${Engine.fmt(t.revenue)}m revenue)`; }
+  const toEur = x => (x * (FX[t.currency || 'USD'] || 1)) / FX.EUR;
+  if (profile.revenue > 0 && t.revenue > 0) { const r = Math.abs(Math.log(profile.revenue / toEur(t.revenue))); sizeScore = Math.max(0, 1 - r / Math.log(10)); if (sizeScore > 0.6) sizeWhy = `similar size (${Engine.fmt(t.revenue)}m revenue)`; }
   else if (profile.employees > 0 && t.employees > 0) { const r = Math.abs(Math.log(profile.employees / t.employees)); sizeScore = Math.max(0, 1 - r / Math.log(10)); }
+  // No target revenue: compare the deal value with a typical software EV (~2x revenue) for the profile.
+  else if (profile.revenue > 0 && t.deal_value > 0) { const r = Math.abs(Math.log((profile.revenue * 2) / toEur(t.deal_value))); sizeScore = 0.85 * Math.max(0, 1 - r / Math.log(10)); if (sizeScore > 0.55) sizeWhy = `similar deal size (${Engine.fmt(t.deal_value)}m)`; }
   const age = t.year ? new Date().getFullYear() - t.year : null;
   const recency = age == null ? 0.4 : age <= 2 ? 1 : age <= 5 ? 0.8 : age <= 8 ? 0.55 : 0.3;
   const tc = String(t.country || '').toLowerCase(), pc = String(profile.country || '').toLowerCase();
-  const tr = REGION_OF(t.country), pr = REGION_OF(profile.country);
+  const tr = txRegion(t), pr = REGION_OF(profile.country);
   const geo = !tc ? 0.4 : pc && tc.includes(pc) ? 1 : pr && tr === pr ? 0.75 : EUROPE.has(pr) && EUROPE.has(tr) ? 0.5 : 0.25;
   const score = 0.4 * textScore + 0.15 * indScore + 0.2 * sizeScore + 0.15 * recency + 0.1 * geo;
   const why = [hits.length ? `matches ${hits.slice(0, 3).join(', ')}` : shared.length ? `shares ${shared.slice(0, 3).join(', ')}` : '', indScore === 1 ? 'same industry' : '', sizeWhy, geo >= 0.75 && t.country ? `${t.country}` : '', age != null && age <= 3 ? `recent (${t.year})` : ''].filter(Boolean);
@@ -213,7 +301,7 @@ function compsFor(proj) {
   const prep = { phrases: phrasesOf(profile.keywords), words: words([profile.description, profile.keywords, profile.sector, profile.subsector].join(' ')), segments: phrasesOf([profile.sector, profile.subsector].join('/')) };
   const yearsBack = Number(v.yearsBack) || 10, minYear = new Date().getFullYear() - yearsBack;
   const region = v.region || '';
-  const pool = state.transactions.filter(t => (t.ev_revenue || t.ev_ebitda) && (!t.year || t.year >= minYear) && (!region || (region === 'Europe' ? EUROPE.has(REGION_OF(t.country)) : REGION_OF(t.country) === region)) && !/minority/i.test(t.type || ''));
+  const pool = state.transactions.filter(t => (t.ev_revenue || t.ev_ebitda) && !isDead(t) && (!t.year || t.year >= minYear) && (!region || (region === 'Europe' ? EUROPE.has(txRegion(t)) : txRegion(t) === region)) && !/minority/i.test(t.type || ''));
   const ranked = pool.map(t => compareTx(profile, t, prep)).sort((a, b) => b.score - a.score);
   const used = ranked.slice(0, Number(v.nComps) || 50);
   return { pool: pool.length, used, closest: used.slice(0, 6), rev: stat(used.map(x => x.t.ev_revenue).filter(x => x != null)), ebitda: stat(used.map(x => x.t.ev_ebitda).filter(x => x != null)) };
@@ -276,11 +364,11 @@ function renderValuationTab(proj, el) {
         <label class="row-label small">Use top <input class="vin" data-vset="nComps" value="${v.nComps || 50}" style="width:46px"></label>
       </div>
       <p class="muted small">${r.comps.pool.toLocaleString()} transactions with a multiple match the filters; the ${r.comps.used.length} most similar (by business description and keywords, industry, size, recency and geography) are used.</p>
-      <table class="compact"><thead><tr><th>Date</th><th>Target</th><th>Buyer</th><th class="num">Revenue</th><th class="num">EV/Rev</th><th class="num">EV/EBITDA</th><th class="num">Fit</th></tr></thead><tbody>
-        ${r.comps.closest.map(x => `<tr title="${esc(x.t.description || '')}"><td class="small">${esc(x.t.date || x.t.year || '')}</td><td><b>${esc(x.t.target)}</b><div class="muted small">${esc([x.t.country, x.t.industry].filter(Boolean).join(' · ').slice(0, 70))}</div><div class="small">${esc(x.why.join(' · '))}</div></td>
-          <td class="small">${esc(x.t.buyer || '')}</td><td class="num">${x.t.revenue != null ? Engine.fmt(x.t.revenue) : '–'}</td><td class="num">${mult(x.t.ev_revenue)}</td><td class="num">${mult(x.t.ev_ebitda)}</td><td class="num"><span class="chip">${x.score}</span></td></tr>`).join('')}
+      <table class="compact"><thead><tr><th>Date</th><th>Target</th><th>Buyer</th><th class="num">Deal value</th><th class="num">Revenue</th><th class="num">EV/Rev</th><th class="num">EV/EBITDA</th><th class="num">Fit</th></tr></thead><tbody>
+        ${r.comps.closest.map(x => `<tr title="${esc(x.t.summary || x.t.description || '')}"><td class="small">${esc(x.t.date || x.t.year || '')}</td><td><b>${esc(x.t.target)}</b><div class="muted small">${esc([x.t.country, x.t.industry].filter(Boolean).join(' · ').slice(0, 70))}</div><div class="small">${esc(x.why.join(' · '))}</div></td>
+          <td class="small">${esc(x.t.buyer || '')}</td><td class="num">${x.t.deal_value != null ? Engine.fmt(x.t.deal_value) : '–'}</td><td class="num">${x.t.revenue != null ? Engine.fmt(x.t.revenue) : '–'}</td><td class="num">${mult(x.t.ev_revenue)}</td><td class="num">${mult(x.t.ev_ebitda)}${x.t.mult_src ? `<div class="muted small" title="${esc(x.t.mult_src)}">text</div>` : ''}</td><td class="num"><span class="chip">${x.score}</span></td></tr>`).join('')}
       </tbody></table>
-      <p class="muted small">The 6 closest transactions; hover a row for the business description. Amounts in the transaction's currency (usually USD m).</p>
+      <p class="muted small">The 6 closest transactions; hover a row for the deal summary. Amounts in USD m. "text" = multiple read from the deal summary (S&P doesn't report the financials for every deal).</p>
     </div>
 
     <div class="card span2" style="order:4">
@@ -302,40 +390,135 @@ function renderValuationTab(proj, el) {
 }
 
 // ---------- Rendering: Comps page ----------
-const cf = { q: '', country: '', from: '', withMult: true, limit: 300 };
+const cf = { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', status: 'live', withMult: false, sort: 'date', limit: 200, open: null };
+const med = arr => percentile(arr, 0.5);
+const splitBuyers = s => String(s || '').split(/;\s*/).map(b => b.replace(/\s*\([^()]*:[^()]*\)\s*$/, '').trim()).filter(Boolean);
+const FIN_BUYER = /capital|partners|equity|private|fund|ventures|investment|investors|holdings? (llc|lp)|l\.?p\.?$|advisors|management (llc|lp)/i;
+const usdm = x => (x == null ? '–' : x >= 1000 ? `${(x / 1000).toFixed(1)}bn` : `${Engine.fmt(x)}m`);
+
 function filteredTx() {
-  const q = cf.q.toLowerCase();
-  return state.transactions.filter(t => (!cf.withMult || t.ev_revenue || t.ev_ebitda) && (!cf.country || String(t.country || '').includes(cf.country)) && (!cf.from || (t.year || 0) >= +cf.from) &&
-    (!q || [t.target, t.buyer, t.seller, t.industry, t.description].join(' ').toLowerCase().includes(q)))
-    .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  const q = cf.q.toLowerCase(), b = cf.buyer.toLowerCase();
+  const list = state.transactions.filter(t => (!cf.withMult || t.ev_revenue || t.ev_ebitda) &&
+    (cf.status === 'all' || (cf.status === 'live' ? !isDead(t) : /complet|closed|effective/i.test(t.status || ''))) &&
+    (!cf.industry || t.industry === cf.industry) && (!cf.region || bigRegion(t) === cf.region) &&
+    (!b || String(t.buyer || '').toLowerCase().includes(b)) &&
+    (!cf.from || (t.year || 0) >= +cf.from) && (!cf.to || (t.year || 9999) <= +cf.to) &&
+    (!cf.minSize || (t.deal_value ?? t.ev ?? -1) >= +cf.minSize) && (!cf.maxSize || (t.deal_value ?? t.ev ?? Infinity) <= +cf.maxSize) &&
+    (!q || [t.target, t.buyer, t.seller, t.industry, t.tags, t.description, t.country].join(' ').toLowerCase().includes(q)));
+  const by = { date: (a, z) => String(z.date || '').localeCompare(String(a.date || '')), size: (a, z) => (z.deal_value ?? z.ev ?? -1) - (a.deal_value ?? a.ev ?? -1),
+    evr: (a, z) => (z.ev_revenue ?? -1) - (a.ev_revenue ?? -1), eve: (a, z) => (z.ev_ebitda ?? -1) - (a.ev_ebitda ?? -1) };
+  return list.sort(by[cf.sort] || by.date);
 }
+
+function groupStats(list, keyFn) {
+  const g = new Map();
+  for (const t of list) for (const k of [].concat(keyFn(t))) { if (!k) continue; if (!g.has(k)) g.set(k, []); g.get(k).push(t); }
+  return [...g].map(([k, ts]) => ({ k, n: ts.length, evr: stat(ts.map(t => t.ev_revenue).filter(x => x != null)), eve: stat(ts.map(t => t.ev_ebitda).filter(x => x != null)), size: med(ts.map(t => t.deal_value).filter(x => x > 0)) }));
+}
+
+function yearChart(list) {
+  const ys = groupStats(list, t => t.year).filter(y => y.k >= 2000).sort((a, b) => a.k - b.k);
+  if (!ys.length) return '';
+  const max = Math.max(...ys.map(y => y.n)), maxM = Math.max(...ys.map(y => y.evr.median || 0), 1);
+  return `<div class="yr-chart">${ys.map(y => `<button class="yr ${String(cf.from) === String(y.k) && String(cf.to) === String(y.k) ? 'on' : ''}" data-cyear="${y.k}" title="${y.k}: ${y.n} deals · median EV/Revenue ${mult(y.evr.median)} (n=${y.evr.n}) · EV/EBITDA ${mult(y.eve.median)} (n=${y.eve.n})">
+      <span class="yr-m">${y.evr.n >= 3 ? mult(y.evr.median) : ''}</span>
+      <span class="yr-bars"><i class="yr-n" style="height:${Math.round((y.n / max) * 100)}%"></i><i class="yr-x" style="height:${y.evr.n >= 3 ? Math.round(((y.evr.median || 0) / maxM) * 100) : 0}%"></i></span>
+      <span class="yr-l">${String(y.k).slice(2)}</span><span class="yr-c">${y.n}</span></button>`).join('')}</div>
+    <div class="legend small muted"><i class="sw n"></i> deals <i class="sw x"></i> median EV/Revenue (shown when ≥3 deals have one) · click a year to filter</div>`;
+}
+
+function segTable(rows, attr, active, limit = 12) {
+  const max = Math.max(...rows.map(r => r.n), 1);
+  return `<table class="compact seg"><thead><tr><th></th><th class="num">Deals</th><th class="num">EV/Rev</th><th class="num">EV/EBITDA</th><th class="num">Median size</th></tr></thead><tbody>
+    ${rows.slice(0, limit).map(r => `<tr class="${r.k === active ? 'on' : ''}" ${attr}="${esc(r.k)}"><td><div class="seg-l">${esc(r.k)}</div><div class="seg-bar"><i style="width:${Math.round((r.n / max) * 100)}%"></i></div></td>
+      <td class="num">${r.n.toLocaleString()}</td><td class="num" title="n=${r.evr.n}">${r.evr.n >= 3 ? mult(r.evr.median) : '–'}</td><td class="num" title="n=${r.eve.n}">${r.eve.n >= 3 ? mult(r.eve.median) : '–'}</td><td class="num">${usdm(r.size)}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+
+function crmIndex() {
+  const m = new Map();
+  for (const c of state.companies || []) { const k = Engine.normName(c.name); if (k && !m.has(k)) m.set(k, c); }
+  return m;
+}
+
+function txDetail(t) {
+  return `<tr class="tx-detail"><td colspan="9"><div class="tx-d">
+    <div>${t.summary ? `<p>${esc(t.summary)}</p>` : ''}${t.description ? `<p class="muted"><b>Target:</b> ${esc(t.description)}</p>` : ''}
+      ${t.tags ? `<div>${t.tags.split(', ').slice(0, 12).map(x => `<button class="chip" data-ctag="${esc(x)}">${esc(x)}</button>`).join('')}</div>` : ''}</div>
+    <dl class="tx-facts"><dt>Status</dt><dd>${esc(t.status || '–')}</dd><dt>Seller</dt><dd>${esc(t.seller || '–')}</dd><dt>Buyer</dt><dd>${esc([t.buyer, t.buyer_country].filter(Boolean).join(' · ') || '–')}</dd>
+      ${t.buyer_industry ? `<dt>Buyer industry</dt><dd>${esc(t.buyer_industry)}</dd>` : ''}<dt>Deal value</dt><dd>${usdm(t.deal_value)} ${esc(t.currency || '')}</dd>
+      ${t.ev != null ? `<dt>EV</dt><dd>${usdm(t.ev)}</dd>` : ''}${t.revenue != null ? `<dt>Revenue</dt><dd>${usdm(t.revenue)}</dd>` : ''}${t.ebitda != null ? `<dt>EBITDA</dt><dd>${usdm(t.ebitda)}</dd>` : ''}
+      ${t.mult_src ? `<dt>Multiple</dt><dd>${esc(t.mult_src)} (approximate)</dd>` : ''}${t.id ? `<dt>ID</dt><dd>${esc(t.id)}</dd>` : ''}</dl></div></td></tr>`;
+}
+
 function renderComps() {
   if (!$('#compsView')) return;
-  const all = state.transactions, list = filteredTx();
+  const all = state.transactions;
+  if (!all.length) {
+    $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">No transactions yet</div></div>
+      <div class="actions"><label class="btn primary">Import Capital IQ transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
+      <div class="card narrow"><h2>Import your Capital IQ transactions</h2>
+        <ol class="small"><li>In Capital IQ (classic or Pro): <b>Screening → Transactions</b>. Criteria: M&A, target industry Software, announced 2015–today, acquisition of whole company / majority.</li>
+        <li>Columns: Target, Transaction ID, Announced date, Status, Buyers, Sellers, Total Transaction Value, Implied EV, Implied EV/Revenue, Implied EV/EBITDA, Target LTM revenue and EBITDA, Target country, Primary industry, Business description, Topic tags, Deal summary.</li>
+        <li>Export to Excel and import here (several files at once is fine). Columns are recognised automatically, S&P Capital IQ Pro field codes too; where the financials are missing, multiples are read from the deal summary. Re-importing updates instead of duplicating.</li></ol></div>`;
+    return;
+  }
+  const list = filteredTx();
   const s1 = stat(list.map(t => t.ev_revenue).filter(x => x != null)), s2 = stat(list.map(t => t.ev_ebitda).filter(x => x != null));
-  const countries = [...new Set(all.map(t => t.country).filter(Boolean).map(c => c.split(/[;,(]/)[0].trim()))].sort().slice(0, 200);
-  $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA</div></div>
-      <div class="actions">${all.length ? '<button class="btn danger" data-vx="cleartx">Delete all transactions</button>' : ''}
-        <label class="btn primary">Import Capital IQ transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
-    ${all.length ? `<div class="kpis">
-        <div class="kpi"><div class="k">Filtered deals</div><div class="v">${list.length.toLocaleString()}</div></div>
-        <div class="kpi"><div class="k">Median EV/Revenue</div><div class="v">${mult(s1.median)}</div><div class="muted small">P25–P75 ${mult(s1.p25)}–${mult(s1.p75)} · n=${s1.n}</div></div>
-        <div class="kpi"><div class="k">Median EV/EBITDA</div><div class="v">${mult(s2.median)}</div><div class="muted small">P25–P75 ${mult(s2.p25)}–${mult(s2.p75)} · n=${s2.n}</div></div>
-      </div>
-      <div class="filters">
-        <input type="search" id="cfQ" placeholder="Search target, buyer, industry, description… (e.g. document management)" value="${esc(cf.q)}">
-        <select id="cfCountry"><option value="">All countries</option>${countries.map(c => `<option ${c === cf.country ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
-        <label class="row-label">From year <input id="cfFrom" value="${esc(cf.from)}" placeholder="2015" style="width:70px"></label>
-        <label class="check"><input type="checkbox" id="cfMult" ${cf.withMult ? 'checked' : ''}> Only with multiples</label>
-      </div>
-      <div class="table-wrap"><table class="data"><thead><tr><th>Date</th><th>Target</th><th>Buyer</th><th>Seller</th><th>Country</th><th class="num">EV</th><th class="num">Revenue</th><th class="num">EBITDA</th><th class="num">EV/Rev</th><th class="num">EV/EBITDA</th></tr></thead><tbody>
-        ${list.slice(0, cf.limit).map(t => `<tr title="${esc(t.description || '')}"><td class="small">${esc(t.date || t.year || '')}</td><td><b>${esc(t.target)}</b><div class="co-sub">${esc(t.industry || '')}</div></td><td class="small">${esc(t.buyer || '')}</td><td class="small">${esc(t.seller || '')}</td><td class="small">${esc(t.country || '')}</td>
-          <td class="num">${t.ev != null ? Engine.fmt(t.ev) : ''}</td><td class="num">${t.revenue != null ? Engine.fmt(t.revenue) : ''}</td><td class="num">${t.ebitda != null ? Engine.fmt(t.ebitda) : ''}</td><td class="num">${mult(t.ev_revenue)}</td><td class="num">${mult(t.ev_ebitda)}</td></tr>`).join('')}
-      </tbody></table>${list.length > cf.limit ? `<div id="moreTx" style="padding:10px;text-align:center"><button class="btn" data-vx="moretx">Show more (${(list.length - cf.limit).toLocaleString()} left)</button></div>` : ''}</div>`
-    : `<div class="card narrow"><h2>Import your Capital IQ transactions</h2>
-        <ol class="small"><li>In Capital IQ: <b>Screening → Transactions</b>. Criteria: M&A, status Closed, target industry Software, Europe + North America, announced 2015–today, percent sought ≥ 50%.</li>
-        <li>Columns: Target/Issuer, Announced date, Closed date, Buyers/Investors, Sellers, Total Transaction Value, Implied Enterprise Value, Implied EV/Revenue, Implied EV/EBITDA, Target LTM revenue and EBITDA, Target employees, Target country/geography, Primary industry, Business description, Percent sought, Transaction ID.</li>
-        <li>Export to Excel (split by period if there are too many rows) and import here. Columns are recognised automatically; re-importing updates instead of duplicating.</li></ol></div>`}`;
+  const sizes = list.map(t => t.deal_value).filter(x => x > 0);
+  const buyers = list.flatMap(t => splitBuyers(t.buyer));
+  const fin = list.filter(t => splitBuyers(t.buyer).some(b => FIN_BUYER.test(b))).length;
+  const industries = groupStats(list, t => t.industry).sort((a, b) => b.n - a.n);
+  const regions = groupStats(list, bigRegion).sort((a, b) => b.n - a.n);
+  const crm = crmIndex();
+  const topBuyers = [...buyers.reduce((m, b) => m.set(b, (m.get(b) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]).slice(0, 12);
+  const allInd = [...new Set(all.map(t => t.industry).filter(Boolean))].sort();
+  const allReg = [...new Set(all.map(bigRegion))].sort();
+  const active = [cf.q && `“${cf.q}”`, cf.industry, cf.region, cf.buyer && `buyer: ${cf.buyer}`, (cf.from || cf.to) && `${cf.from || '…'}–${cf.to || '…'}`, (cf.minSize || cf.maxSize) && `size ${cf.minSize || 0}–${cf.maxSize || '∞'}m`].filter(Boolean);
+  const th = (k, label) => `<th class="num sortable ${cf.sort === k ? 'on' : ''}" data-csort="${k}">${label}${cf.sort === k ? ' ↓' : ''}</th>`;
+
+  $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
+      <div class="actions"><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
+        <label class="btn primary">Import transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
+    <div class="filters">
+      <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
+      <select id="cfIndustry"><option value="">All industries</option>${allInd.map(c => `<option ${c === cf.industry ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+      <select id="cfRegion"><option value="">All regions</option>${allReg.map(c => `<option ${c === cf.region ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+      <select id="cfStatus"><option value="live" ${cf.status === 'live' ? 'selected' : ''}>Completed + pending</option><option value="done" ${cf.status === 'done' ? 'selected' : ''}>Completed only</option><option value="all" ${cf.status === 'all' ? 'selected' : ''}>Incl. terminated</option></select>
+      <label class="row-label">Years <input id="cfFrom" value="${esc(cf.from)}" placeholder="2015" style="width:58px">–<input id="cfTo" value="${esc(cf.to)}" placeholder="2026" style="width:58px"></label>
+      <label class="row-label">Deal size <input id="cfMin" value="${esc(cf.minSize)}" placeholder="min" style="width:54px">–<input id="cfMax" value="${esc(cf.maxSize)}" placeholder="max" style="width:54px"> m</label>
+      <label class="check"><input type="checkbox" id="cfMult" ${cf.withMult ? 'checked' : ''}> Only with multiples</label>
+      ${active.length ? `<button class="link small" data-vx="resetcf">Clear filters (${active.join(' · ')})</button>` : ''}
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="k">Deals</div><div class="v">${list.length.toLocaleString()}</div><div class="muted small">${fin ? `${Math.round((fin / Math.max(1, list.length)) * 100)}% financial buyers (by name)` : ''}</div></div>
+      <div class="kpi"><div class="k">Median deal size</div><div class="v">${usdm(med(sizes))}</div><div class="muted small">P25–P75 ${usdm(percentile(sizes, 0.25))}–${usdm(percentile(sizes, 0.75))}</div></div>
+      <div class="kpi"><div class="k">Median EV/Revenue</div><div class="v">${mult(s1.median)}</div><div class="muted small">P25–P75 ${mult(s1.p25)}–${mult(s1.p75)} · n=${s1.n}</div></div>
+      <div class="kpi"><div class="k">Median EV/EBITDA</div><div class="v">${mult(s2.median)}</div><div class="muted small">P25–P75 ${mult(s2.p25)}–${mult(s2.p75)} · n=${s2.n}</div></div>
+    </div>
+    <div class="comps-grid">
+      <div class="card span2"><h2>Deal activity and multiples by year</h2>${yearChart(list)}</div>
+      <div class="card"><h2>By industry</h2>${segTable(industries, 'data-cind', cf.industry)}</div>
+      <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
+        <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
+    </div>
+    <div class="table-wrap"><table class="data tx-table"><thead><tr><th class="sortable ${cf.sort === 'date' ? 'on' : ''}" data-csort="date">Date${cf.sort === 'date' ? ' ↓' : ''}</th><th>Target</th><th>Buyer</th><th>Country</th>${th('size', 'Deal value')}<th class="num">Revenue</th><th class="num">EBITDA</th>${th('evr', 'EV/Rev')}${th('eve', 'EV/EBITDA')}</tr></thead><tbody>
+      ${list.slice(0, cf.limit).map(t => { const b = splitBuyers(t.buyer), c = b.map(x => crm.get(Engine.normName(x))).find(Boolean);
+        return `<tr class="tx-row ${cf.open === t.key ? 'open' : ''}" data-ctx="${esc(t.key)}"><td class="small">${esc(t.date || t.year || '')}${isDead(t) ? '<div class="chip red">terminated</div>' : /announced/i.test(t.status || '') ? '<div class="chip amber">pending</div>' : ''}</td>
+        <td><b>${esc(t.target)}</b><div class="co-sub">${esc([t.industry, t.tags].filter(Boolean).join(' · ').slice(0, 90))}</div></td>
+        <td class="small"><div class="tx-buyer">${esc(b.slice(0, 2).join('; '))}${b.length > 2 ? ` +${b.length - 2}` : ''}${c ? ` <button class="chip blue" data-open="${c.id}">in CRM</button>` : ''}</div></td><td class="small">${esc(t.country || '')}</td>
+        <td class="num">${t.deal_value != null ? usdm(t.deal_value) : ''}</td><td class="num">${t.revenue != null ? usdm(t.revenue) : ''}</td><td class="num">${t.ebitda != null ? usdm(t.ebitda) : ''}</td>
+        <td class="num">${mult(t.ev_revenue)}</td><td class="num">${mult(t.ev_ebitda)}${t.mult_src ? '<sup title="Read from the deal summary">*</sup>' : ''}</td></tr>${cf.open === t.key ? txDetail(t) : ''}`; }).join('')}
+    </tbody></table>${list.length > cf.limit ? `<div style="padding:10px;text-align:center"><button class="btn" data-vx="moretx">Show more (${(list.length - cf.limit).toLocaleString()} left)</button></div>` : ''}</div>
+    <p class="muted small">Click a row for the deal summary. * = multiple read from the deal summary text (approximate; currencies converted at average rates). Deal value is the total transaction value reported by S&P/Capital IQ.</p>`;
+}
+
+function exportFilteredTx() {
+  const cols = ['date', 'target', 'buyer', 'seller', 'status', 'country', 'region', 'industry', 'tags', 'deal_value', 'ev', 'revenue', 'ebitda', 'ev_revenue', 'ev_ebitda', 'mult_src', 'description', 'summary', 'id'];
+  const rows = filteredTx().map(t => Object.fromEntries(cols.map(k => [TX_LABELS[k] || k, t[k] ?? ''])));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Transactions');
+  XLSX.writeFile(wb, `comps-${today()}.xlsx`);
 }
 
 // ---------- Report ----------
@@ -373,6 +556,20 @@ document.addEventListener('click', e => {
   if (x === 'gocomps') return showTab('comps');
   if (x === 'report' && proj) return openValuationReport(proj);
   if (x === 'moretx') { cf.limit += 300; return renderComps(); }
+  if (x === 'exporttx') return exportFilteredTx();
+  if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', limit: 200, open: null }); return renderComps(); }
+  if (e.target.closest('#compsView')) {
+    if (e.target.closest('[data-open]')) return;
+    const el = s => e.target.closest(`[${s}]`)?.getAttribute(s);
+    const toggle = (k, v) => { cf[k] = cf[k] === v ? '' : v; cf.limit = 200; renderComps(); };
+    if (el('data-cyear')) { const y = el('data-cyear'); const on = cf.from === y && cf.to === y; cf.from = cf.to = on ? '' : y; return renderComps(); }
+    if (el('data-cind') != null) return toggle('industry', el('data-cind'));
+    if (el('data-creg') != null) return toggle('region', el('data-creg'));
+    if (el('data-cbuyer')) return toggle('buyer', el('data-cbuyer'));
+    if (el('data-ctag')) { cf.q = el('data-ctag'); return renderComps(); }
+    if (el('data-csort')) { cf.sort = el('data-csort'); return renderComps(); }
+    if (el('data-ctx') && !e.target.closest('.tx-detail')) { const k = el('data-ctx'); cf.open = cf.open === k ? null : k; return renderComps(); }
+  }
   if (x === 'cleartx' && confirm(`Delete all ${state.transactions.length} transactions?`)) { state.transactions = []; saveTransactions().then(renderComps); return; }
   const g = e.target.closest('[data-grade]');
   if (g && proj) return setVal(proj, v => { v.grades ??= {}; v.grades[g.dataset.grade] = g.dataset.g; });
@@ -385,9 +582,9 @@ document.addEventListener('change', e => {
   if (t.id === 'txUpload') { const files = [...t.files]; t.value = ''; if (files.length) importTransactionFiles(files); return; }
   if (t.dataset.vin && proj) return setVal(proj, v => { v.inputs ??= {}; const n = Engine.parseNumber(t.value); if (n == null) delete v.inputs[t.dataset.vin]; else v.inputs[t.dataset.vin] = n; });
   if (t.dataset.vset && proj) return setVal(proj, v => { v[t.dataset.vset] = t.value; });
-  if (t.id === 'cfCountry') { cf.country = t.value; renderComps(); }
+  const cfInputs = { cfIndustry: 'industry', cfRegion: 'region', cfStatus: 'status', cfFrom: 'from', cfTo: 'to', cfMin: 'minSize', cfMax: 'maxSize' };
+  if (cfInputs[t.id]) { cf[cfInputs[t.id]] = t.value.trim(); cf.limit = 200; renderComps(); }
   if (t.id === 'cfMult') { cf.withMult = t.checked; renderComps(); }
-  if (t.id === 'cfFrom') { cf.from = t.value.trim(); renderComps(); }
 });
 let cfTimer;
 document.addEventListener('input', e => {
