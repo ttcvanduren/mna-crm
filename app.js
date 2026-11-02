@@ -347,6 +347,9 @@ $('#importResearch').addEventListener('change', async e => {
       let c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name, website: it.website || it.profile.website }, idx).exact[0];
       if (!c) { c = newCompany(it.name); state.companies.push(c); Engine.indexAdd(idx, c); added++; } else updated++;
       Enricher.apply(c, it.profile, { at: it.researched_at || d.created || new Date().toISOString(), model: d.model || 'Claude Code (subscription)', usd: 0, searches: it.searches || 0 });
+      // Research that confirms the type ("type: Financial" in notes) replaces a guessed type, never one you set yourself.
+      const type = String(it.profile.notes || '').match(/^type:\s*(strategic|financial)/i)?.[1];
+      if (type && (!c.role || c.role_auto)) { c.role = /financial/i.test(type) ? 'Investor' : 'Buyer'; c.role_auto = false; }
       migrate(c);
       touch(c);
     }
@@ -1547,8 +1550,10 @@ $('#signIn').addEventListener('click', async () => { try { await signIn(); toast
 $('#signOut').addEventListener('click', async () => { try { const app = getMsal(); await app.logoutPopup({ account: app.getActiveAccount() }); } catch (e) { toast(e.message); } renderAccount(); });
 
 // ---------- Backup ----------
+// A backup is the complete database: companies, projects, transactions and settings. It doubles as the master file.
+const backupData = () => ({ version: 5, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, transactions: state.transactions, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory });
 $('#backup').addEventListener('click', () => {
-  const data = { version: 4, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory };
+  const data = backupData();
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: 'application/json' }));
   a.download = `mna-crm-backup-${new Date().toISOString().slice(0, 10)}.json`;
@@ -1561,7 +1566,8 @@ $('#restore').addEventListener('change', async e => {
   try {
     const d = JSON.parse(await f.text());
     if (!Array.isArray(d.companies)) throw new Error('Not a CRM backup file');
-    if (!confirm(`Restore ${d.companies.length} companies from this backup? Companies with the same ID are overwritten; others are kept.`)) return;
+    if (!confirm(`Restore ${d.companies.length.toLocaleString()} companies${d.transactions?.length ? ` and ${d.transactions.length.toLocaleString()} transactions` : ''} from this backup? Companies with the same ID are overwritten; others are kept. Transactions are merged.`)) return;
+    if (d.transactions?.length) { mergeTransactionList(d.transactions); await saveTransactions(); }
     const incoming = d.companies.map(migrate);
     const map = new Map(state.companies.map(c => [c.id, c]));
     incoming.forEach(c => map.set(c.id, c));

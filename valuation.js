@@ -266,6 +266,16 @@ async function importTransactionFiles(files) {
   if (!incoming.length) return toast('No transactions found. The sheet needs at least a target/company column.', 7000);
   const preview = report.map(r => `${r.file} › ${r.sheet}: ${r.rows.toLocaleString()} deals · ${r.rev.toLocaleString()} with reported revenue · ${r.mult.toLocaleString()} with a multiple${r.mined ? ` (${r.mined.toLocaleString()} read from the deal summary)` : ''}\n   ${r.map.join('\n   ')}${r.ignored.length ? `\n   ignored: ${r.ignored.join(', ').replace(/\n/g, ' ')}` : ''}`).join('\n\n');
   if (!confirm(`Import ${incoming.length.toLocaleString()} transactions? Deals you already have are merged, not duplicated.\n\n${preview.slice(0, 2500)}`)) return;
+  const { added, updated } = mergeTransactionList(incoming);
+  await saveTransactions();
+  renderComps();
+  toast(`Transactions: ${added.toLocaleString()} new, ${updated.toLocaleString()} merged into deals you already had.`, 8000);
+  // Keep Companies in step with the transactions, so Find buyers sees every acquirer.
+  await addBuyersToCompanies();
+}
+
+// Adds deals to state.transactions, merging the ones it already has (also used when restoring a backup).
+function mergeTransactionList(incoming) {
   const byKey = new Map(state.transactions.map(t => [t.key, t]));
   const byAlt = new Map();
   for (const t of state.transactions) { const k = altKey(t); byAlt.set(k, byAlt.has(k) ? null : t); }
@@ -277,11 +287,7 @@ async function importTransactionFiles(files) {
     else { byKey.set(t.key, t); const k = altKey(t); byAlt.set(k, byAlt.has(k) ? null : t); added++; }
   }
   state.transactions = [...new Set(byKey.values())];
-  await saveTransactions();
-  renderComps();
-  toast(`Transactions: ${added.toLocaleString()} new, ${updated.toLocaleString()} merged into deals you already had.`, 8000);
-  // Keep Companies in step with the transactions, so Find buyers sees every acquirer.
-  await addBuyersToCompanies();
+  return { added, updated };
 }
 
 // ---------- Similarity ----------
