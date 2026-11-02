@@ -114,7 +114,7 @@ function renderProjectDetail(name) {
 
   const tab = state.projectTab || 'overview';
   const due = followUpsDue(name).length;
-  const tabs = [['overview', 'Overview'], ['buyers', `Buyers (${all.length})`], ['board', 'Pipeline board'], ['find', '✦ Find buyers'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]];
+  const tabs = [['overview', 'Overview'], ['buyers', `Buyers (${all.length})`], ['board', 'Pipeline board'], ['valuation', '€ Valuation'], ['find', '✦ Find buyers'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]];
   const head = `<div class="page-head">
       <div><button class="link small" id="backProjects">← All projects</button>
         <h1>${esc(proj.name)} <span class="chip ${proj.status === 'Active' ? 'green' : ''}" style="vertical-align:middle">${esc(proj.status)}</span></h1>

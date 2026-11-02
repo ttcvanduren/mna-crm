@@ -78,6 +78,7 @@ function renderProjectTab(proj, tab) {
   if (tab === 'board') el.innerHTML = boardHtml(proj);
   if (tab === 'find') el.innerHTML = findHtml(proj);
   if (tab === 'followups') el.innerHTML = followupsHtml(proj);
+  if (tab === 'valuation') renderValuationTab(proj, el);
 }
 
 // ---------- Overview: deal profile, valuation, offers, precedents ----------
@@ -131,6 +132,7 @@ function overviewHtml(proj) {
 
     <div class="card">
       <h2>Valuation indication</h2>
+      ${(() => { if (!state.transactions?.length || !(t.revenue || t.ebitda)) return ''; const vr = valuate(proj); return vr.blend ? `<div class="callout" style="margin-bottom:10px"><span>€</span><div><b>Comparable transactions: ${eur(vr.blend[0])} – ${eur(vr.blend[2])}</b> <span class="muted">(mid ${eur(vr.blend[1])}, ${vr.comps.used.length} deals, scorecard ${vr.sc.adj >= 0 ? '+' : ''}${Math.round(vr.sc.adj * 100)}%)</span></div><span class="spacer"></span><button class="btn sm" data-ptab="valuation">Open</button></div><h3 style="margin-top:4px">Quick multiples check</h3>` : ''; })()}
       ${v.rows.length ? `<table class="compact val"><thead><tr><th>Method</th><th class="num">Metric</th><th class="num">Low</th><th class="num">Mid</th><th class="num">High</th></tr></thead><tbody>
           ${v.rows.map(([k, val, mm], i) => `<tr><td>${k}</td><td class="num">${eur(val)}</td>${mm.map((x, j) => `<td class="num"><input class="mult" data-mult="${k === 'EV / Revenue' ? 'rev' : 'ebitda'}" data-i="${j}" value="${x}">×<div class="muted small">${eur(val * x)}</div></td>`).join('')}</tr>`).join('')}
           <tr class="total"><td colspan="2"><b>Enterprise value</b></td>${v.ev.map(x => `<td class="num"><b>${eur(x)}</b></td>`).join('')}</tr>

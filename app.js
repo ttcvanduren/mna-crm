@@ -39,6 +39,7 @@ const state = {
   templates: [DEFAULT_TEMPLATE],
   activity: [],
   projects: [],
+  transactions: [],
   projectView: null,
   settings: loadSettings(),
   weights: { ...Engine.DEFAULT_WEIGHTS },
@@ -128,6 +129,7 @@ function showTab(name) {
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'dashboard') renderDashboard();
+  if (name === 'comps') renderComps();
   if (name === 'projects') renderProjects();
   if (name === 'companies') renderCompanies();
   if (name === 'email') renderEmail();
@@ -1616,6 +1618,7 @@ async function loadData() {
   state.companies = companies.map(migrate);
   state.projects = projects || [];
   syncProjectsFromCompanies();
+  await loadTransactions();
   state.templates = templates?.length ? templates : [DEFAULT_TEMPLATE];
   state.activity = activity || [];
   state.weights = { ...Engine.DEFAULT_WEIGHTS, ...(weights || {}) };

@@ -15,7 +15,7 @@ The data lives in a **shared team database** (Supabase) once connected, or in yo
 
 Upload these files to your `mna-crm` repo with **Add file → Upload files → Commit changes**:
 
-`index.html`, `app.js`, `projects.js`, `pipeline.js`, `process.js`, `connectors.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
+`index.html`, `app.js`, `projects.js`, `pipeline.js`, `process.js`, `connectors.js`, `valuation.js`, `engine.js`, `enrich.js`, `store.js`, `config.js`, `styles.css`, `README.md`, `supabase-setup.sql`
 
 **Don't upload** `CLAUDE.md`, `sample-companies.csv`, or the `.claude`, `database` and `research` folders. They contain client data or local tooling.
 
@@ -67,6 +67,23 @@ This uses your subscription's usage limits instead of paid API calls. It works w
 - Claude **does not log into LinkedIn**. It only uses LinkedIn pages and numbers that are publicly visible in search results.
 - Claude **never guesses email addresses**. Emails come from your own lists, or you add them by hand.
 - Your own data always wins: Claude only fills in empty fields, and never overwrites what you imported.
+
+## Comps & valuation
+
+1. **Comps & valuation → Import Capital IQ transactions.** Use Screening → Transactions with these criteria:
+   - M&A, status Closed, target industry Software, Europe + North America
+   - Announced 2015–today, percent sought ≥ 50%, amounts in USD mm
+   - Columns: Target/Issuer, Announced date, Buyers/Investors, Sellers, Total Transaction Value, Implied Enterprise Value, Implied EV/Revenue, Implied EV/EBITDA, Target LTM revenue and EBITDA, employees, geographic location, primary industry, business description, percent sought, Transaction ID
+
+   Several files at once are fine. Re-importing fills in details instead of duplicating. Missing multiples are calculated from EV and the financials, and implausible values are left out.
+2. **Project → € Valuation**, built on the deal profile (revenue, EBITDA, sector, keywords, description):
+   - **Comparable transactions:** the most similar deals (50 by default), scored on business description and keywords (40%), industry (15%), size (20%), recency (15%) and geography (10%). You can filter by years and region.
+   - **Median and P25–P75** for EV/Revenue and EV/EBITDA. EBITDA multiples are ignored when the margin is below 10%.
+   - **The 6 closest transactions**, each with a "why comparable" note.
+   - **Scorecard of 10 value drivers**: growth, recurring revenue, EBITDA margin, gross margin, NRR, customer concentration, scale, market position, management depth, and international footprint and addressable market. Each is graded A–E with a weight (A +25% … E −25% on that factor). Number inputs are graded automatically, and you can click a grade to override it.
+   - **Value range** (low, mid, high) = P25 / median / P75 × (1 + scorecard adjustment) × metric, plus optional net debt to get the equity value.
+   - **How to increase the valuation:** the factors with the biggest uplift, with concrete tips.
+   - **Valuation report:** a printable PDF for the client.
 
 ## Dashboard
 
