@@ -294,6 +294,34 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable.on { color: var(--accent-dark); }
 .tx-row { cursor: pointer; }
 .tx-row.open td { background: #f5f8ff; }
+/* ---------- Market heat map ---------- */
+.mk-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 16px; }
+@media (max-width: 1200px) { .mk-grid { grid-template-columns: 1fr; } }
+.mk-line { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 6px 0; border-bottom: 1px dashed var(--line); cursor: pointer; }
+.mk-line .muted { grid-column: 1 / -1; }
+.mk-line:hover b { color: var(--accent-dark); }
+.mk-pulse { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.heat-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 99px; white-space: nowrap; }
+.heat-badge.hot { background: #fee4e2; color: #b42318; }
+.heat-badge.up { background: var(--good-soft); color: var(--good); }
+.heat-badge.flat { background: #f2f4f7; color: #475467; }
+.heat-badge.down { background: #eff8ff; color: #175cd3; }
+table.heat td.hc { color: #14181f; font-variant-numeric: tabular-nums; min-width: 44px; }
+.mk-row { cursor: pointer; }
+.mk-row.open td { box-shadow: inset 0 -1px 0 var(--accent); }
+table.data .mk-detail td { background: #fafbff; white-space: normal; }
+.mk-d { position: sticky; left: 0; max-width: calc(100vw - 320px); display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1.3fr); gap: 20px; padding: 6px 4px; }
+@media (max-width: 1200px) { .mk-d { grid-template-columns: 1fr; } }
+.mk-q { display: flex; align-items: flex-end; gap: 3px; height: 60px; margin: 6px 0 8px; }
+.mk-q i { flex: 1; background: var(--accent); opacity: .7; border-radius: 3px 3px 0 0; min-height: 1px; }
+.mk-deal { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+.mk-fin { display: flex; align-items: flex-end; gap: 6px; height: 90px; margin-top: 6px; }
+.mk-fin b { font-size: 10px; color: var(--muted); font-weight: 600; }
+.mk-fin div { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+.mk-fin i { width: 70%; background: var(--purple); opacity: .75; border-radius: 3px 3px 0 0; min-height: 1px; }
+.mk-fin span { font-size: 11px; color: var(--muted); }
+.buyer-profile { display: grid; gap: 6px; margin: 6px 0 12px; }
+.bp-row { display: grid; grid-template-columns: 90px 1fr; gap: 8px; align-items: start; }
 .tx-table td { white-space: normal; }
 .tx-table td:nth-child(2) { min-width: 220px; }
 .tx-buyer { max-width: 260px; white-space: normal; }

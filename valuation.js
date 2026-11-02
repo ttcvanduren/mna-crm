@@ -54,7 +54,7 @@ const hk = h => String(h ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 const SPG_CODES = { SPTR_TARGET_NAME: 'target', SPTR_MI_TRANSACTION_ID: 'id', SPTR_ANN_DATE: 'date', SPTR_CLOSED_DATE: 'closed', SPTR_COMPLETION_DATE: 'closed', SPTR_TRANSACTION_TYPE: 'type', SPTR_STATUS: 'status', SPTR_TRANSACTION_VALUE: 'deal_value', 324281: 'buyer', 324283: 'seller', SPTR_MI_TARGET_PRIMARY_INDUSTRY: 'industry', 326140: 'region', SPTR_DEAL_SUMMARY: 'summary', SPTR_TARGET_COUNTRY: 'country', SPTR_ACQUIRER_COUNTRY: 'buyer_country', SPTR_TARGET_CIQ_TOTAL_REV: 'revenue', SPTR_TARGET_CIQ_EBITDA: 'ebitda', SPTR_SNL_TOTAL_REV: 'revenue', SPTR_SNL_EBITDA: 'ebitda', SPTR_TARGET_TEV: 'tev', SPTR_TV_TO_SALES: 'ev_revenue', SPTR_TV_TO_EBITDA: 'ev_ebitda' };
 // Target financials come in USD thousands; transaction values and TEV in USD millions.
 const SPG_SCALE = { SPTR_TARGET_CIQ_TOTAL_REV: 0.001, SPTR_TARGET_CIQ_EBITDA: 0.001 };
-const SPG_LABELS = [['description', /^business description.*target/], ['long_description', /^long business description.*target/], ['tags', /topic tags.*target/], ['industry', /primary industry.*target/], ['buyer_industry', /primary industry.*buyer/], ['buyer_description', /^business description.*buyer/]];
+const SPG_LABELS = [['description', /^business description.*target/], ['long_description', /^long business description.*target/], ['tags', /topic tags.*target/], ['industry', /primary industry.*target/], ['buyer_industry', /primary industry.*buyer/], ['buyer_description', /^business description.*buyer/], ['buyer_long', /^long business description.*buyer/]];
 function spgLayout(rows) {
   const ci = rows.slice(0, 15).findIndex(r => r.some(v => /^SPTR_/.test(String(v))));
   if (ci < 0) return null;
@@ -108,6 +108,13 @@ const unwrapOwn = (s, name) => (name && s.startsWith(name + ' (') && s.endsWith(
 // "Name (Tag)" -> "Tag"; "Name (SaaS (x))" -> "SaaS (x)", also when S&P uses a slightly different company name.
 const tagOf = p => (/\)\)\s*$/.test(p) ? p.match(/^[^()]+\((.+)\)\s*$/)?.[1] : p.match(/\(([^()]*)\)\s*$/)?.[1]) || p;
 const lastParens = s => String(s).split(/;\s*/).map(tagOf).filter(Boolean);
+// "A Corp (A makes X); B LP (B is a PE firm)" -> Map { "A Corp" => "A makes X", "B LP" => "B is a PE firm" }
+function splitPerBuyer(text, names) {
+  const pos = names.map(n => ({ n, i: text.indexOf(n + ' (') })).filter(x => x.i >= 0).sort((a, b) => a.i - b.i);
+  return new Map(pos.map((x, j) => [x.n, unwrapOwn(text.slice(x.i, pos[j + 1]?.i).replace(/;\s*$/, '').trim(), x.n)]));
+}
+// Buyer descriptions seen during this session's imports, by normalised buyer name (not saved with the deals).
+const BUYER_TEXT = new Map();
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : s);
 
 // ---------- Financials from the deal summary (S&P/Capital IQ deal text) ----------
@@ -176,8 +183,19 @@ function cleanTexts(t) {
   // Compact the long S&P text fields so thousands of deals stay small.
   if (t.description) t.description = clip(unwrapOwn(t.description, t.target), 800);
   if (t.long_description) { if (!t.description) t.description = clip(unwrapOwn(t.long_description, t.target), 800); delete t.long_description; }
-  // Only kept for single-buyer deals, where it unambiguously describes that buyer.
-  if (t.buyer_description) { const b = splitBuyers(t.buyer); if (b.length === 1) t.buyer_description = clip(unwrapOwn(t.buyer_description, b[0]), 500); else delete t.buyer_description; }
+  // Buyer descriptions go to BUYER_TEXT (per buyer, also for consortium deals) for "Add buyers to Companies";
+  // on the deal itself only the single buyer's short description is kept, to keep the transactions small.
+  const names = splitBuyers(t.buyer);
+  for (const [field, key, max] of [['buyer_description', 'desc', 500], ['buyer_long', 'long', 1500]]) {
+    if (!t[field]) continue;
+    for (const [name, s] of splitPerBuyer(t[field], names)) {
+      const k = Engine.normName(name), cur = BUYER_TEXT.get(k) || {};
+      cur[key] ||= clip(s, max);
+      BUYER_TEXT.set(k, cur);
+    }
+  }
+  delete t.buyer_long;
+  if (t.buyer_description) { if (names.length === 1) t.buyer_description = clip(unwrapOwn(t.buyer_description, names[0]), 500); else delete t.buyer_description; }
   if (t.tags) t.tags = [...new Set(t.tags.split(/;\s*/).map(p => (p.startsWith(t.target + ' (') ? unwrapOwn(p, t.target) : tagOf(p))))].join(', ');
   if (t.buyer_industry) t.buyer_industry = [...new Set(lastParens(t.buyer_industry))].join(', ');
   if (/\(/.test(t.industry || '')) t.industry = lastParens(t.industry)[0];
@@ -194,6 +212,9 @@ function finishTx(t) {
     if (mined.has(metric) || (evValue === t.ev && mined.has('ev'))) mined.add(k);
   };
   derive('ev_revenue', 'revenue', ev); derive('ev_ebitda', 'ebitda', ev);
+  // Exports with TV/Sales but no revenue column: the revenue follows from the deal value and the multiple.
+  if (t.revenue == null && t.ev_revenue > 0 && t.deal_value > 0 && !mined.has('ev_revenue')) t.revenue = Math.round((t.deal_value / t.ev_revenue) * 100) / 100;
+  if (t.ebitda == null && t.ev_ebitda > 0 && t.deal_value > 0 && !mined.has('ev_ebitda')) t.ebitda = Math.round((t.deal_value / t.ev_ebitda) * 100) / 100;
   // Whatever is still missing is read from the deal summary and marked as such ("mined").
   if (t.summary && !t.mined && (t.ev_revenue == null || t.ev_ebitda == null)) {
     const m = mineSummary(t);
@@ -624,7 +645,11 @@ function buyerGroups() {
       if (parts.length === 1) { b.country ||= t.buyer_country; b.industry ||= t.buyer_industry; b.description ||= t.buyer_description; }
     }
   }
-  for (const b of g.values()) b.role = Engine.guessRole({ name: b.name, sector: b.industry, description: b.description });
+  for (const [k, b] of g) {
+    const bt = BUYER_TEXT.get(k);
+    if (bt) { b.description ||= bt.desc; b.long ||= bt.long; }
+    b.role = Engine.guessRole({ name: b.name, sector: b.industry, description: b.description || b.long });
+  }
   return [...g.values()].sort((a, b) => b.deals.length - a.deals.length);
 }
 const acqFromTx = t => ({
@@ -650,7 +675,8 @@ async function addBuyersToCompanies() {
     for (const c of targets) {
       const fill = (k, v) => { if (v && !c[k]) c[k] = v; };
       fill('ticker', g.ticker); fill('country', g.country); fill('sector', g.industry); // the type (strategic / financial) is guessed by touch() once these fields are in
-      fill('description', g.description); fill('short_description', g.description && clip(firstSentences(g.description), 240));
+      fill('description', g.description || g.long); fill('summary', g.long !== c.description ? g.long : '');
+      fill('short_description', (g.description || g.long) && clip(firstSentences(g.description || g.long), 240));
       if (g.ticker) fill('ownership', `Listed (${g.ticker})`);
       deals += mergeAcquisitions(c, g.deals.map(acqFromTx));
       if (c.acquisitions.length >= 3) c.acquisitive = 'yes'; else if (!c.acquisitive || c.acquisitive === 'unknown') c.acquisitive = 'some';
@@ -659,8 +685,32 @@ async function addBuyersToCompanies() {
     }
   }
   await flush();
+  const merged = await consolidateFundHouses();
   renderCompanies();
-  toast(`Buyers: ${created.toLocaleString()} new companies, ${updated.toLocaleString()} existing ones updated, ${deals.toLocaleString()} deals added.`, 8000);
+  toast(`Buyers: ${created.toLocaleString()} new companies, ${updated.toLocaleString()} existing ones updated, ${deals.toLocaleString()} deals added${merged ? `; ${merged.toLocaleString()} fund vehicles merged into their investment house` : ''}.`, 9000);
+}
+
+// "Thoma Bravo Fund XV, L.P." and "Thoma Bravo, L.P." become one company "Thoma Bravo" with all deals (each marked
+// with the fund it went through). Lossless: the vehicles stay as aliases and as restorable merged records.
+const LEGAL_TAIL = /([,\s]+(l\.?\s?l?\.?\s?[pc]\.?|inc\.?|ltd\.?|limited|llc|ab|\(publ\)|plc|s\.?a\.?s?|gmbh|se|as|sarl|s\.à r\.l\.))+\s*$/i;
+async function consolidateFundHouses() {
+  const remove = [];
+  for (const { key, members } of Engine.fundHouses(state.companies)) {
+    const rank = c => (Engine.isFundVehicle(c.name) ? 0 : 1e6) + Engine.richness(c);
+    const [keep, ...rest] = [...members].sort((a, b) => rank(b) - rank(a));
+    for (const c of members) for (const a of c.acquisitions || []) if (Engine.isFundVehicle(c.name)) a.via ||= c.name;
+    rest.forEach(c => { Engine.mergeCompanies(keep, c); remove.push(c.id); });
+    // Name the house cleanly ("EQT", "Thoma Bravo"), unless the name came from your own lists.
+    const fromYourLists = (keep.sources || []).some(s => s !== TX_SOURCE);
+    const plain = members.filter(c => !Engine.isFundVehicle(c.name)).map(c => c.name).sort((a, b) => Engine.normName(a).length - Engine.normName(b).length)[0];
+    const clean = plain ? plain.replace(LEGAL_TAIL, '').replace(/\s+(management|advis[eo]rs?|group)$/i, '').trim() : Engine.houseName(keep.name, key);
+    if ((!fromYourLists || Engine.isFundVehicle(keep.name)) && clean && clean !== keep.name) { (keep.aliases ??= []).push(keep.name); keep.name = clean; }
+    keep.role = 'Investor';
+    migrate(keep);
+    touch(keep);
+  }
+  if (remove.length) await removeCompanies(remove);
+  return remove.length;
 }
 
 // ---------- Report ----------

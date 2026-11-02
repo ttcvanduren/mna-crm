@@ -19,7 +19,7 @@ const Enricher = (() => {
       type: 'object',
       additionalProperties: false,
       required: ['website', 'linkedin_url', 'linkedin_employees', 'employees', 'hq_city', 'country', 'founded', 'ownership', 'sector', 'subsector',
-        'short_description', 'long_description', 'is_acquisitive', 'people', 'acquisitions', 'notes', 'sources'],
+        'short_description', 'long_description', 'company_type', 'is_acquisitive', 'acquisition_focus', 'target_sectors', 'target_countries', 'people', 'acquisitions', 'notes', 'sources'],
       properties: {
         website: str,
         linkedin_url: { type: 'string', description: 'Company page, e.g. https://www.linkedin.com/company/acme' },
@@ -30,7 +30,11 @@ const Enricher = (() => {
         sector: str, subsector: str,
         short_description: { type: 'string', description: 'One sentence' },
         long_description: { type: 'string', description: '4-6 sentences: products, customers, geography, size, strategy' },
+        company_type: { type: 'string', enum: ['Strategic', 'Financial', 'unknown'], description: 'Strategic = operating company; Financial = PE / VC / fund / investment firm / pension or sovereign fund' },
         is_acquisitive: { type: 'string', enum: ['yes', 'some', 'no', 'unknown'] },
+        acquisition_focus: { type: 'string', description: '2-3 sentences on what kind of companies it buys: sectors and niches, business models, typical size, geography, strategy (e.g. buy-and-build in vertical SaaS)' },
+        target_sectors: { type: 'string', description: 'Semicolon-separated sectors/niches it acquires in, e.g. "ERP; field service software; IT managed services"' },
+        target_countries: { type: 'string', description: 'Semicolon-separated countries or regions it acquires in, e.g. "Netherlands; Germany; Nordics"' },
         people: {
           type: 'array',
           items: {
@@ -144,8 +148,24 @@ If the name is ambiguous, use the website and country to pick the right company,
     if (p.linkedin_employees) { c.linkedin_employees = toNumber(p.linkedin_employees); c.linkedin_employees_text = p.linkedin_employees; }
     if (blank(c.employees) && toNumber(p.employees)) c.employees = toNumber(p.employees);
     if (p.short_description) c.short_description = p.short_description;
-    if (p.long_description && blank(c.description)) c.description = p.long_description;
-    if (p.acquisitions?.length) c.acquisitions = p.acquisitions;
+    // A researched description is current; keep it next to the original (description) rather than overwrite it.
+    if (p.long_description) { if (blank(c.description)) c.description = p.long_description; else c.summary = p.long_description; }
+    if (p.acquisition_focus) c.acquisition_focus = p.acquisition_focus;
+    for (const k of ['target_sectors', 'target_countries']) if (blank(c[k]) && p[k]) c[k] = p[k];
+    if (p.company_type === 'Strategic' || p.company_type === 'Financial') {
+      if (!c.role || c.role_auto) { c.role = p.company_type === 'Financial' ? 'Investor' : 'Buyer'; c.role_auto = false; }
+    }
+    // Researched deals are added to the deal history (e.g. from S&P); known targets only get missing details.
+    if (p.acquisitions?.length) {
+      c.acquisitions ??= [];
+      const key = a => Engine.normName(a.target || '');
+      for (const a of p.acquisitions) {
+        if (!a.target) continue;
+        const same = c.acquisitions.find(x => key(x) === key(a));
+        if (same) { for (const [k, v] of Object.entries(a)) if (v && !same[k]) same[k] = v; } else c.acquisitions.push({ ...a });
+      }
+      c.acquisitions.sort((x, y) => String(y.date || y.year || '').localeCompare(String(x.date || x.year || '')));
+    }
     c.contacts ??= [];
     for (const person of p.people || []) {
       if (!person.name) continue;
@@ -163,7 +183,7 @@ If the name is ambiguous, use the website and country to pick the right company,
     }
     c.enrichment = {
       at: meta.at, model: meta.model, usd: Math.round(meta.usd * 1000) / 1000, searches: meta.searches,
-      short_description: p.short_description, long_description: p.long_description, is_acquisitive: p.is_acquisitive,
+      short_description: p.short_description, long_description: p.long_description, is_acquisitive: p.is_acquisitive, acquisition_focus: p.acquisition_focus,
       notes: p.notes, sources: (p.sources || []).filter(Boolean).slice(0, 30),
     };
     return c;

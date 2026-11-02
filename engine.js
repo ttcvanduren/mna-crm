@@ -311,6 +311,46 @@ const Engine = (() => {
     return 'Buyer';
   }
 
+  // One investment house, many legal names: "Thoma Bravo Fund XV, L.P.", "EQT X", "Hg Saturn 1", "Vista Equity Partners Management, LLC".
+  const VEHICLE_WORD = /\b(fund|fonds|scsp|sca|fpci|fcpr|fcpi|sicav|feeder|co-?invest\w*|parallel)\b/i;
+  const VEHICLE_END = /\b(i{1,3}|iv|v|vi{1,3}|ix|x|xi{1,3}|xiv|xv|xvi{1,3}|\d{1,2})\s*(,?\s*(l\.?\s?p\.?|ab|scsp|sca|ltd\.?|limited|llc|s\.?a\.?))?\.?\s*$/i;
+  const isFundVehicle = name => VEHICLE_WORD.test(name || '') || VEHICLE_END.test(name || '');
+  const HOUSE_CUT = new Set('fund fonds scsp sca fpci fcpr fcpi sicav feeder co coinvest coinvestment parallel management manager managers advisers advisors adviser advisor group holdings holding trust investments investment investors private mid midmarket growth discover explore origin perennial tactical infrastructure real energy credit impact evolution strategic europe european asia global international opportunities special buyout pme small saturn mercury genesis'.split(' '));
+  const NUMBERISH = /^(i{1,3}|iv|v|vi{1,3}|ix|x|xi{1,3}|xiv|xv|xvi{1,3}|\d{1,3})$/;
+  const HOUSE_TAIL = new Set(['capital', 'equity', 'partners', 'partner', 'l', 'p', 'lp', 'llp', 'llc', 'ltd', 'limited', 'inc', 'sa', 'sas', 'ab', 'as', 'gmbh', 'kg', 'co', 'sarl', 'publ', 'plc', 'se', 'nv', 'bv']);
+  const HOUSE_ALIAS = { hgcapital: 'hg' };
+  const GENERIC_HOUSE = new Set('capital private global china shenzhen shanghai beijing ningbo hangzhou suzhou guangzhou the first new asia europe invest investment partners equity fund national state'.split(' '));
+  function houseKey(name) {
+    const w = normName(name).split(' ').filter(Boolean);
+    let n = w.findIndex((t, i) => i > 0 && (HOUSE_CUT.has(t) || NUMBERISH.test(t)));
+    let k = n > 0 ? w.slice(0, n) : w;
+    while (k.length > 1 && HOUSE_TAIL.has(k[k.length - 1])) k = k.slice(0, -1);
+    const key = k.join(' ');
+    return HOUSE_ALIAS[key] || key;
+  }
+  // The house's display name, taken from the start of an original name ("Thoma Bravo Fund XV, L.P." -> "Thoma Bravo").
+  function houseName(name, key = houseKey(name)) {
+    const words = String(name || '').split(/\s+/);
+    for (let n = 1; n <= words.length; n++) {
+      const cand = words.slice(0, n).join(' ').replace(/[,;]+$/, '');
+      if (houseKey(cand) === key && !isFundVehicle(cand)) return cand;
+    }
+    return name;
+  }
+  // Groups of financial buyers that are one house. Only merged when a fund vehicle is involved, so two firms that
+  // just share a word ("Summit Partners" / "Summit Capital") stay apart.
+  function fundHouses(companies) {
+    const g = new Map();
+    for (const c of companies) {
+      if (c.role !== 'Investor') continue;
+      const k = houseKey(c.name);
+      if (k.length < 2 || GENERIC_HOUSE.has(k)) continue;
+      if (!g.has(k)) g.set(k, []);
+      g.get(k).push(c);
+    }
+    return [...g].filter(([, cs]) => cs.length > 1 && cs.some(c => isFundVehicle(c.name))).map(([key, members]) => ({ key, members }));
+  }
+
   function normaliseRole(r) {
     const s = lower(r);
     if (!s) return '';
@@ -647,7 +687,12 @@ const Engine = (() => {
     if (dc && candWants.some(w => w === dc || w === lower(dr) || (w === 'europe' && EUROPE.has(dr)) || w === 'global')) return [1, `Targets ${deal.country}`];
     if (dc && dc === cc) return [1, `Same country: ${cand.country}`];
     if (dr && dr === cr) return [0.7, `Same region: ${cr}`];
+    // Where the buyer has bought before counts almost as much as where it sits.
+    const bought = acquisitionProfile(cand).countries.map(([k]) => lower(k));
+    if (dc && bought.includes(dc)) return [0.85, `Acquired in ${deal.country} before`];
+    if (dr && bought.some(k => regionOf({ country: k }) === dr)) return [0.65, `Acquired in ${dr} before`];
     if (EUROPE.has(dr) && EUROPE.has(cr)) return [0.4, 'Both in Europe'];
+    if (EUROPE.has(dr) && bought.some(k => EUROPE.has(regionOf({ country: k })))) return [0.4, 'Acquired in Europe before'];
     return [0, null];
   }
 
@@ -664,6 +709,15 @@ const Engine = (() => {
       return [Math.max(0, edge - 0.5), null];
     }
     const bRev = buyer.revenue;
+    // No buyer revenue: compare the target's likely EV (~2x revenue, EUR -> USD) with the deal sizes the buyer has done.
+    if (bRev == null && candIsBuyerSide) {
+      const ap = acquisitionProfile(cand);
+      if (!ap.sizes.length) return [0.3, null];
+      const ev = tRev * 2 * 1.1, lo = ap.minSize / 3, hi = ap.maxSize * 1.5;
+      const range = `$${fmt(ap.minSize)}m–$${fmt(ap.maxSize)}m`;
+      if (ev >= lo && ev <= hi) return [ap.sizes.length >= 3 ? 1 : 0.8, `Deal sizes ${range} fit`];
+      return [ev > hi ? 0.15 : 0.5, null];
+    }
     if (bRev == null) return [0.3, null];
     if (candIsBuyerSide && cand.role === 'Investor') return [0.6, null];
     const ratio = bRev / tRev;
@@ -672,10 +726,32 @@ const Engine = (() => {
     return [Math.max(0, ratio - 0.3), null];
   }
 
+  // What a buyer buys, from its deal history: topic tags, industries, countries and deal sizes (USD m where known).
+  const acqCache = new WeakMap();
+  function acquisitionProfile(c) {
+    const list = c.acquisitions || [];
+    const hit = acqCache.get(c);
+    if (hit && hit.n === list.length) return hit;
+    const count = arr => [...arr.filter(Boolean).reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]);
+    const sizes = list.map(a => parseNumber(String(a.deal_value || '').replace(/^\$/, ''))).filter(x => x > 0).sort((a, b) => a - b);
+    const years = list.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
+    const p = {
+      n: list.length,
+      tags: count(list.flatMap(a => String(a.tags || '').split(/,\s*/))).slice(0, 12),
+      industries: count(list.map(a => a.industry)).slice(0, 6),
+      countries: count(list.map(a => a.country)).slice(0, 8),
+      sizes, minSize: sizes[0] ?? null, medianSize: sizes.length ? sizes[Math.floor(sizes.length / 2)] : null, maxSize: sizes.length ? sizes[sizes.length - 1] : null,
+      last: years.length ? Math.max(...years) : null,
+      recent: years.filter(y => y >= new Date().getFullYear() - 5).length,
+    };
+    acqCache.set(c, p);
+    return p;
+  }
+
   function acquiredPhrases(deal, cand) {
-    if (!cand.acquisitions?.length) return [];
+    if (!cand.acquisitions?.length && !cand.acquisition_focus) return [];
     const phrases = [...new Set(splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p)))];
-    const text = ' ' + lower(cand.acquisitions.map(a => [a.industry, a.tags, a.description].join(' ')).join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+    const text = ' ' + lower([cand.acquisition_focus, cand.target_sectors, ...(cand.acquisitions || []).map(a => [a.industry, a.tags, a.description].join(' '))].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
     return phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
   }
 
@@ -805,7 +881,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, guessRole, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

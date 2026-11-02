@@ -137,6 +137,7 @@ function showTab(name) {
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'dashboard') renderDashboard();
   if (name === 'comps') renderComps();
+  if (name === 'market') renderMarket();
   if (name === 'projects') renderProjects();
   if (name === 'companies') renderCompanies();
   if (name === 'email') renderEmail();
@@ -183,7 +184,7 @@ function filteredCompanies() {
     (!$('#filterAcq').checked || (c.acquisitions || []).length >= 3) &&
     (!enr || (enr === 'yes') === !!c.enrichment) &&
     (!email || Engine.hasEmail(c)) &&
-    (!q || [c.name, (c.aliases || []).join(' '), c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, contactText(c)].join(' ').toLowerCase().includes(q)));
+    (!q || [c.name, (c.aliases || []).join(' '), c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, c.acquisition_focus, c.target_sectors, contactText(c)].join(' ').toLowerCase().includes(q)));
   const { key, dir } = state.sort;
   const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
   return list.sort((a, b) => {
@@ -498,6 +499,21 @@ $('#downloadTemplate').addEventListener('click', () => {
 });
 
 // ---------- Company profile (drawer) ----------
+// "What this buyer buys", from its deal history: used by Find buyers for fit, geography and size.
+function buyerProfileHtml(c, compact = false) {
+  const p = Engine.acquisitionProfile(c);
+  if (!p.n && !c.acquisition_focus) return '';
+  const chips = (list, cls = '') => list.map(([k, n]) => `<span class="chip ${cls}">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('');
+  const size = p.sizes.length ? `$${Engine.fmt(p.minSize)}m – $${Engine.fmt(p.maxSize)}m (median $${Engine.fmt(p.medianSize)}m, ${p.sizes.length} disclosed)` : '';
+  return `<div class="buyer-profile">${compact ? '' : '<h3 style="margin-top:6px">What they buy</h3>'}
+    ${c.acquisition_focus ? `<p class="small" style="margin:0">${esc(c.acquisition_focus)}</p>` : ''}
+    ${c.target_sectors ? `<div class="bp-row"><span class="muted small">Buys in</span><div class="small">${esc(c.target_sectors)}${c.target_countries ? ` · ${esc(c.target_countries)}` : ''}</div></div>` : ''}
+    ${p.tags.length ? `<div class="bp-row"><span class="muted small">Topics</span><div class="chips">${chips(p.tags.slice(0, compact ? 6 : 12), 'blue')}</div></div>` : ''}
+    ${p.countries.length ? `<div class="bp-row"><span class="muted small">Countries</span><div class="chips">${chips(p.countries.slice(0, compact ? 4 : 8))}</div></div>` : ''}
+    ${size ? `<div class="bp-row"><span class="muted small">Deal sizes</span><div class="small">${size}</div></div>` : ''}
+    <div class="bp-row"><span class="muted small">Activity</span><div class="small">${p.n} acquisitions · ${p.recent} in the last 5 years${p.last ? ` · last ${p.last}` : ''}</div></div></div>`;
+}
+
 function openDrawer(id, tab = 'overview') {
   state.drawer = { id, tab };
   $('#drawer').hidden = false;
@@ -532,7 +548,7 @@ function renderDrawer() {
         <table class="compact">${Object.entries(c.alt).map(([k, vals]) => `<tr><td class="muted">${esc(Engine.COMPANY_FIELDS.find(f => f.key === k)?.label || k)}</td><td><b>${esc(c[k] ?? '')}</b> <span class="muted">(shown)</span>${vals.map((v, i) => `<div>${esc(v)} <button class="link small" data-act="useAlt" data-k="${esc(k)}" data-i="${i}">use this</button></div>`).join('')}</td></tr>`).join('')}</table></details>` : ''}
       ${(e?.long_description || c.summary) && c.description && c.description !== (e?.long_description || c.summary) ? `<details class="small" style="margin-top:8px"><summary>Original description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
       <div class="facts">
-        ${fact('Role', c.role && roleChip(c.role))}
+        ${fact('Type', c.role && roleChip(c.role) + (c.role_auto ? ' <span class="muted small">(auto)</span>' : ''))}
         ${fact('Sector', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
         ${fact('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', ')))}
         ${fact('Founded', esc(c.founded))}
@@ -548,6 +564,7 @@ function renderDrawer() {
       ${c.target_sectors || c.target_countries || c.min_revenue != null || c.max_revenue != null ? `<h3>Acquisition criteria</h3><div class="facts">
         ${fact('Sectors', esc(c.target_sectors))}${fact('Countries', esc(c.target_countries))}
         ${fact('Revenue range', c.min_revenue != null || c.max_revenue != null ? `€${c.min_revenue ?? 0}–${c.max_revenue ?? '∞'}m` : '')}</div>` : ''}
+      ${(c.acquisitions || []).length || c.acquisition_focus ? `<h3>What they buy ${(c.acquisitions || []).length ? `<button class="link small" data-dtab="acquisitions">all ${c.acquisitions.length} deals →</button>` : ''}</h3>${buyerProfileHtml(c, true)}` : ''}
       ${c.projects.length ? `<h3>Track record with us</h3><div class="chips">${c.projects.map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}">${esc(p.project)}: ${esc(p.status || 'Not approached')}</span>`).join('')}</div>
         ${c.projects.filter(p => p.rationale).map(p => `<p class="small"><b>Why it fits ${esc(p.project)}:</b> ${esc(p.rationale)}</p>`).join('')}` : ''}
       ${c.portfolio ? `<h3>Portfolio</h3><p class="prose">${esc(c.portfolio)}</p>` : ''}
@@ -585,11 +602,12 @@ function renderDrawer() {
         <div class="fact"><div class="k">Acquisitive</div><div class="v">${esc(c.acquisitive || c.enrichment?.is_acquisitive || '–')}</div></div>
       </div>
       ${inds.length ? `<div class="chips" style="margin:10px 0">${inds.map(([k, n]) => `<span class="chip purple">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('')}</div>` : ''}
+      ${buyerProfileHtml(c)}
       ${c.acq_notes ? `<p class="muted small">${esc(c.acq_notes)}</p>` : ''}
       <div class="timeline">${acq.map(a => {
         const size = [a.deal_value && `Deal value ${a.deal_value}`, a.target_revenue && `Revenue ${a.target_revenue}`, a.ev_revenue && `${a.ev_revenue}x revenue`, a.ev_ebitda && `${a.ev_ebitda}x EBITDA`, a.target_employees && `${a.target_employees} employees`, a.seller && `from ${a.seller}`].filter(Boolean).join(' · ');
         const site = a.target_website ? Engine.cleanUrl(a.target_website) : '';
-        return `<div class="tl-item"><div class="tl-year">${esc(a.date || a.year || 'Date unknown')}${a.type ? ` · ${esc(a.type)}` : ''}${a.stake ? ` · ${esc(a.stake)}` : ''}</div>
+        return `<div class="tl-item"><div class="tl-year">${esc(a.date || a.year || 'Date unknown')}${a.type ? ` · ${esc(a.type)}` : ''}${a.stake ? ` · ${esc(a.stake)}` : ''}${a.via ? ` · via ${esc(a.via)}` : ''}</div>
         <div class="co-line"><b>${esc(a.target)}</b>${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener">↗ ${esc(Engine.domainOf(site))}</a>` : ''}
           ${a.industry ? `<span class="chip purple">${esc(a.industry)}</span>` : ''}${a.country ? `<span class="chip">${esc(a.country)}</span>` : ''}</div>
         ${size ? `<div class="small"><b>${esc(size)}</b></div>` : ''}
