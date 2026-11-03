@@ -83,9 +83,22 @@ function migrate(c) {
 }
 // Every company gets a type. Guessed types (role_auto) are re-guessed as data comes in; a type you set yourself is kept.
 function classify(c) {
+  classifyNiche(c);
   if (c.role && !c.role_auto) return;
   c.role = Engine.guessRole(c);
   c.role_auto = true;
+}
+// Industry > niche from the taxonomy (taxonomy.js) instead of broad labels like "Application Software".
+// A niche you (or research) set is kept; an automatic one (niche_auto) is re-derived as texts change.
+function classifyNiche(c) {
+  if (c.niche && !c.niche_auto) { c.industry ||= Taxonomy.industryOf(c.niche); return; }
+  // Only re-derive when the texts changed (a signature is stored with the company), so loading stays fast.
+  const sig = [c.sector, c.subsector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|').length + ':' + String(c.short_description || '').slice(0, 40) + ':' + String(c.description || '').slice(0, 40) + ':' + (c.subsector || '');
+  if (c.niche_sig === sig) return;
+  c.niche_sig = sig;
+  const n = Taxonomy.classify(c)[0];
+  if (n) Object.assign(c, { niche: n.niche, industry: n.industry, niche_auto: true });
+  else if (c.niche_auto) { delete c.niche; delete c.industry; delete c.niche_auto; }
 }
 function newCompany(name) {
   return migrate({ id: uid(), name, created: new Date().toISOString(), status: 'New', contacts: [], projects: [], sources: [] });
@@ -178,7 +191,7 @@ function filteredCompanies() {
     (!role || c.role === role) &&
     (!project || c.projects.some(p => p.project === project)) &&
     (!country || c.country === country) &&
-    (!sector || c.sector === sector) &&
+    (!sector || (sector.startsWith('i:') ? c.industry === sector.slice(2) : sector.startsWith('n:') ? c.niche === sector.slice(2) : c.sector === sector)) &&
     (!own || Engine.ownershipType(c.ownership) === own) &&
     (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
     (!multi || c.projects.length > 1) &&
@@ -213,7 +226,7 @@ function renderCompanies() {
       <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
       <td>${companyCell(c)}</td>
       <td>${roleChip(c.role)}</td>
-      <td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
+      <td>${industryCell(c)}</td><td>${esc(c.country)}</td>
       <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
       <td class="num">${money(c, c.revenue)}</td>
       <td>${c.contacts.length ? `${c.contacts.length}${emails ? ` <span class="muted small">· ${emails} ✉</span>` : ''} ${tags.map(t => `<span class="tag k">${esc(tagShort(t))}</span>`).join('')}` : '<span class="muted">–</span>'}</td>
@@ -228,6 +241,8 @@ function renderCompanies() {
   renderFilterOptions();
 }
 
+// Niche (with its industry) instead of a broad label like "Application Software"; the label stays visible if there's no niche.
+const industryCell = c => (c.niche ? `<span title="${esc([c.industry, c.niche_auto ? 'auto' : '', c.sector && !Taxonomy.isGeneric(c.sector) ? c.sector : ''].filter(Boolean).join(' · '))}">${esc(c.niche)}</span><div class="muted small">${esc(c.industry || '')}</div>` : esc(c.sector || ''));
 function renderFilterOptions() {
   const fill = (sel, values, all, label = v => v) => {
     const cur = $(sel).value;
@@ -237,7 +252,21 @@ function renderFilterOptions() {
   fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'Strategic + financial', roleLabel);
   fill('#filterProject', [...new Set(state.companies.flatMap(c => c.projects.map(p => p.project)).filter(Boolean))].sort(), 'All projects');
   fill('#filterCountry', [...new Set(state.companies.map(c => c.country).filter(Boolean))].sort(), 'All countries');
-  fill('#filterSector', [...new Set(state.companies.map(c => c.sector).filter(Boolean))].sort(), 'All sectors');
+  // Industry > niche from the taxonomy; companies without a niche can still be found by their own sector label.
+  {
+    const cur = $('#filterSector').value, count = new Map();
+    state.companies.forEach(c => { if (c.niche) count.set(c.niche, (count.get(c.niche) || 0) + 1); });
+    const opt = (v, l) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
+    const groups = Taxonomy.INDUSTRIES.map(ind => {
+      const niches = Taxonomy.NICHES.filter(n => n.industry === ind && count.has(n.niche));
+      if (!niches.length) return '';
+      const total = niches.reduce((a, n) => a + count.get(n.niche), 0);
+      return `<optgroup label="${esc(ind)}">${opt('i:' + ind, `All ${ind} (${total})`)}${niches.map(n => opt('n:' + n.niche, `${n.niche} (${count.get(n.niche)})`)).join('')}</optgroup>`;
+    }).join('');
+    const rest = [...new Set(state.companies.filter(c => !c.niche).map(c => c.sector).filter(Boolean))].sort();
+    const html = `<option value="">All industries</option>${groups}${rest.length ? `<optgroup label="No niche yet (own sector label)">${rest.map(s => opt(s, s)).join('')}</optgroup>` : ''}`;
+    if ($('#filterSector')._html !== html) { $('#filterSector').innerHTML = html; $('#filterSector')._html = html; }
+  }
   fill('#filterOwnership', [...new Set(state.companies.map(c => Engine.ownershipType(c.ownership)).filter(Boolean))].sort(), 'Any ownership');
   const dl = state.companies.map(c => `<option value="${esc(c.name)}">`).join('');
   if ($('#companyList')._html !== dl) { $('#companyList').innerHTML = dl; $('#companyList')._html = dl; }
@@ -529,6 +558,18 @@ function closeDrawer() {
 $('#drawerBackdrop').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.drawer && !document.querySelector('dialog[open]')) closeDrawer(); });
 
+// Setting a niche by hand fixes it (niche_auto off); "Auto" lets the taxonomy derive it again.
+document.addEventListener('change', e => {
+  const id = e.target.dataset?.niche;
+  if (!id) return;
+  const c = byId(id);
+  if (!c) return;
+  if (e.target.value) Object.assign(c, { niche: e.target.value, industry: Taxonomy.industryOf(e.target.value), niche_auto: false });
+  else { delete c.niche; delete c.industry; c.niche_auto = true; }
+  touch(c);
+  renderDrawer();
+  renderCompanies();
+});
 function renderDrawer() {
   if (!state.drawer) return;
   const c = byId(state.drawer.id);
@@ -550,7 +591,9 @@ function renderDrawer() {
       ${(e?.long_description || c.summary) && c.description && c.description !== (e?.long_description || c.summary) ? `<details class="small" style="margin-top:8px"><summary>Original description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
       <div class="facts">
         ${fact('Type', c.role && roleChip(c.role) + (c.role_auto ? ' <span class="muted small">(auto)</span>' : ''))}
-        ${fact('Sector', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
+        ${fact('Industry / niche', `<select data-niche="${c.id}" class="niche-select"><option value="">${c.niche_auto || !c.niche ? 'Auto' : 'Auto (clear)'}</option>${Taxonomy.INDUSTRIES.map(ind => `<optgroup label="${esc(ind)}">${Taxonomy.NICHES.filter(n => n.industry === ind).map(n => `<option ${n.niche === c.niche ? 'selected' : ''}>${esc(n.niche)}</option>`).join('')}</optgroup>`).join('')}</select>
+          <div class="muted small">${esc(c.industry || 'No niche found')}${c.niche_auto ? ' · auto' : c.niche ? ' · set by you' : ''}${Engine.nichesOf(c).length > 1 ? ` · also ${esc(Engine.nichesOf(c).slice(1, 3).map(n => n.niche).join(', '))}` : ''}</div>`)}
+        ${fact('Sector (source label)', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
         ${fact('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', ')))}
         ${fact('Founded', esc(c.founded))}
         ${fact('Ownership', esc(c.ownership))}

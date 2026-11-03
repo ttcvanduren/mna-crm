@@ -18,7 +18,7 @@ const Enricher = (() => {
     input_schema: {
       type: 'object',
       additionalProperties: false,
-      required: ['website', 'linkedin_url', 'linkedin_employees', 'employees', 'hq_city', 'country', 'founded', 'ownership', 'sector', 'subsector',
+      required: ['website', 'linkedin_url', 'linkedin_employees', 'employees', 'hq_city', 'country', 'founded', 'ownership', 'industry', 'niche', 'sector', 'subsector',
         'short_description', 'long_description', 'company_type', 'is_acquisitive', 'acquisition_focus', 'target_sectors', 'target_countries', 'people', 'acquisitions', 'notes', 'sources'],
       properties: {
         website: str,
@@ -27,7 +27,10 @@ const Enricher = (() => {
         employees: { type: 'string', description: 'Total employees from annual report / website if different from LinkedIn' },
         hq_city: str, country: str, founded: { type: 'string', description: 'Year' },
         ownership: { type: 'string', description: 'e.g. "Founder-owned", "PE-backed (Bregal, since 2021)", "Listed (XETRA: FAA)", "Subsidiary of X"' },
-        sector: str, subsector: str,
+        industry: { type: 'string', enum: [...Taxonomy.INDUSTRIES, 'unknown'], description: 'Industry from the fixed list' },
+        niche: { type: 'string', enum: [...Taxonomy.NICHES.map(n => n.niche), 'unknown'], description: 'The single best-fitting niche from the fixed list (what the company mainly sells). Must belong to the chosen industry.' },
+        sector: { type: 'string', description: 'Specific market in a few words, e.g. "Process mining software" or "Insurance policy administration". Never a broad label like "Application Software", "Systems Software" or "IT Services".' },
+        subsector: { type: 'string', description: 'Narrower niche or product focus, e.g. "Process mining inside Power BI and Qlik"' },
         short_description: { type: 'string', description: 'One sentence' },
         long_description: { type: 'string', description: '4-6 sentences: products, customers, geography, size, strategy' },
         company_type: { type: 'string', enum: ['Strategic', 'Financial', 'unknown'], description: 'Strategic = operating company; Financial = PE / VC / fund / investment firm / pension or sovereign fund' },
@@ -77,6 +80,7 @@ Find:
 4. Key people: CEO, CFO, and whoever is responsible for corporate development, M&A or strategy; active founders too. Include their LinkedIn profile URL when you saw it.
 5. Acquisitions made by this company: target, year and one line each, most recent first, at most 15.
 6. A one-sentence short description and a 4-6 sentence long description.
+7. Industry and niche from the fixed lists, plus a specific sector and subsector (never a broad label like "Application Software").
 
 If the name is ambiguous, use the website and country to pick the right company, and say so in notes.`;
   }
@@ -144,6 +148,10 @@ If the name is ambiguous, use the website and country to pick the right company,
   function apply(c, r, meta) {
     const p = r || {};
     for (const k of ['website', 'country', 'hq_city', 'founded', 'ownership', 'sector', 'subsector']) if (blank(c[k]) && p[k]) c[k] = p[k];
+    // A broad source label ("Application Software") is replaced by the researched sector; real labels from your lists are kept.
+    if (p.sector && !Taxonomy.isGeneric(p.sector) && Taxonomy.isGeneric(c.sector)) c.sector = p.sector;
+    // The researched niche becomes the company's niche unless you set one yourself.
+    if (p.niche && Taxonomy.industryOf(p.niche) && (!c.niche || c.niche_auto || c.niche_src === 'research')) Object.assign(c, { niche: p.niche, industry: Taxonomy.industryOf(p.niche), niche_auto: false, niche_src: 'research' });
     if (p.linkedin_url) c.linkedin_url = Engine.cleanUrl(p.linkedin_url);
     if (p.linkedin_employees) { c.linkedin_employees = toNumber(p.linkedin_employees); c.linkedin_employees_text = p.linkedin_employees; }
     if (blank(c.employees) && toNumber(p.employees)) c.employees = toNumber(p.employees);

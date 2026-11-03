@@ -655,15 +655,51 @@ const Engine = (() => {
   // "Input management / IDP" -> ["input management", "idp"]
   const segments = s => lower(s).split(/\s*[\/,;&|]\s*|\s+and\s+/).map(x => x.trim()).filter(x => x && !GENERIC.has(x));
 
+  // Niches from the taxonomy (taxonomy.js), cached per object until its texts change.
+  const nicheCache = new WeakMap();
+  function nichesOf(c) {
+    if (typeof Taxonomy === 'undefined') return [];
+    const sig = [c.niche, c.niche_auto, c.subsector, c.sector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|');
+    const hit = nicheCache.get(c);
+    if (hit && hit.sig === sig) return hit.v;
+    const v = Taxonomy.classify(c);
+    nicheCache.set(c, { sig, v });
+    return v;
+  }
+  const isGenericSector = s => (typeof Taxonomy !== 'undefined' ? Taxonomy.isGeneric(s) : !s);
+
   function sectorScore(deal, cand) {
-    const ds = lower(deal.sector), cs = lower(cand.sector);
+    // 1. Niche first: "Process mining & intelligence" says far more than "Application Software".
+    const dn = nichesOf(deal), cn = nichesOf(cand);
+    if (dn.length) {
+      // A second niche only counts when it's nearly as strong as the main one (Process mining 9, Data 4 -> only Process mining).
+      const top = dn.filter((x, i) => i === 0 || (i === 1 && x.score >= dn[0].score * 0.6)).map(x => x.niche);
+      const same = cn.find(x => top.includes(x.niche));
+      if (same) return [same.niche === top[0] ? 1 : 0.85, `Same niche: ${same.niche}`];
+      const ap = acquisitionProfile(cand).niches;
+      const bought = ap.find(([k]) => top.includes(k));
+      if (bought) return [bought[0] === top[0] ? 0.9 : 0.75, `Bought in ${bought[0]} (${bought[1]}×)`];
+      const shared = cn.find(x => dn.some(d => d.niche === x.niche));
+      if (shared) return [0.75, `Shared niche: ${shared.niche}`];
+      const near = cn.find(x => top.some(n => Taxonomy.adjacent(n, x.niche)));
+      if (near) return [0.65, `Adjacent niche: ${near.niche}`];
+      const boughtNear = ap.find(([k]) => top.some(n => Taxonomy.adjacent(n, k)));
+      if (boughtNear) return [0.55, `Bought in adjacent ${boughtNear[0]} (${boughtNear[1]}×)`];
+      // What the buyer says it wants must contain the niche (or a synonym), not just share a word like "analytics".
+      const wants = splitList(cand.target_sectors).find(w => top.some(n => [lower(n), ...Taxonomy.synonyms(n)].some(s => w === s || w.includes(s))));
+      if (wants) return [1, `Wants ${wants}`];
+      const ind = cn.find(x => x.industry === dn[0].industry);
+      if (ind) return [0.5, `Same industry: ${ind.industry} (${ind.niche})`];
+    }
+    // 2. Sector labels, ignoring broad ones that every software company shares.
+    const ds = isGenericSector(deal.sector) ? '' : lower(deal.sector), cs = isGenericSector(cand.sector) ? '' : lower(cand.sector);
     const dSub = lower(deal.subsector), cSub = lower(cand.subsector);
     const candWants = splitList(cand.target_sectors), dealWants = splitList(deal.target_sectors);
-    if (ds && candWants.some(w => sameish(w, ds) || sameish(w, dSub))) return [1, `Wants ${deal.sector}`];
-    if (cs && dealWants.some(w => sameish(w, cs) || sameish(w, cSub))) return [1, `${cand.sector} is in deal focus`];
+    if ((ds || dSub) && candWants.some(w => (ds && sameish(w, ds)) || (dSub && sameish(w, dSub)))) return [1, `Wants ${deal.subsector || deal.sector}`];
+    if ((cs || cSub) && dealWants.some(w => (cs && sameish(w, cs)) || (cSub && sameish(w, cSub)))) return [1, `${cand.subsector || cand.sector} is in deal focus`];
     if (ds && cs && ds === cs) return dSub && cSub && dSub === cSub ? [1, `Same sub-sector: ${cand.subsector}`] : [0.85, `Same sector: ${cand.sector}`];
-    if (sameish(ds, cs) || (dSub && sameish(dSub, cSub))) return [0.6, `Related sector: ${cand.sector}`];
-    const dSeg = segments((deal.sector || '') + '/' + (deal.subsector || '')), cSeg = segments((cand.sector || '') + '/' + (cand.subsector || ''));
+    if ((ds && cs && sameish(ds, cs)) || (dSub && cSub && sameish(dSub, cSub))) return [0.6, `Related sector: ${cand.subsector || cand.sector}`];
+    const dSeg = segments(ds + '/' + dSub).filter(s => !isGenericSector(s)), cSeg = segments(cs + '/' + cSub).filter(s => !isGenericSector(s));
     const segHit = dSeg.find(a => cSeg.some(b => a === b || (a.length > 4 && b.length > 4 && sameish(a, b))));
     if (segHit) return [0.75, `Same segment: ${segHit.toUpperCase().length <= 4 ? segHit.toUpperCase() : segHit}`];
     const dt = new Set(ds.split(/\W+/).filter(t => t.length > 3 && !GENERIC.has(t))), overlap = cs.split(/\W+/).filter(t => dt.has(t));
@@ -672,8 +708,14 @@ const Engine = (() => {
   }
 
   // Deal keywords like "input management; document AI" matched as phrases in the buyer's texts.
+  // The deal's own keywords plus the synonyms of its main niche, so "process intelligence" also finds "process mining" buyers.
+  function dealPhrases(deal) {
+    const own = splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p));
+    const top = nichesOf(deal)[0];
+    return [...new Set([...own, ...(top ? Taxonomy.synonyms(top.niche) : [])])];
+  }
   function phraseScore(deal, cand) {
-    const phrases = [...new Set(splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p)))];
+    const phrases = dealPhrases(deal);
     if (!phrases.length) return [0, []];
     const text = ' ' + textOf(cand).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
     const hits = phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
@@ -737,6 +779,7 @@ const Engine = (() => {
     const years = list.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
     const p = {
       n: list.length,
+      niches: count(list.map(a => (typeof Taxonomy !== 'undefined' ? Taxonomy.ofDeal(a)?.niche : null))),
       tags: count(list.flatMap(a => String(a.tags || '').split(/,\s*/))).slice(0, 12),
       industries: count(list.map(a => a.industry)).slice(0, 6),
       countries: count(list.map(a => a.country)).slice(0, 8),
@@ -750,7 +793,7 @@ const Engine = (() => {
 
   function acquiredPhrases(deal, cand) {
     if (!cand.acquisitions?.length && !cand.acquisition_focus) return [];
-    const phrases = [...new Set(splitList(deal.keywords).filter(p => p.length > 2 && !GENERIC.has(p)))];
+    const phrases = dealPhrases(deal);
     const text = ' ' + lower([cand.acquisition_focus, cand.target_sectors, ...(cand.acquisitions || []).map(a => [a.industry, a.tags, a.description].join(' '))].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
     return phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
   }
@@ -805,7 +848,11 @@ const Engine = (() => {
     const tags = (cand.tags || []).join(' ');
     const said = cand.acquisitive || cand.enrichment?.is_acquisitive;
     // Strongest signal: the buyer already bought something in the deal's space.
-    const phrases = deal ? [...new Set([...splitList(deal.keywords), ...segments(deal.sector || '')].filter(p => p.length > 2 && !GENERIC.has(p)))] : [];
+    const phrases = deal ? [...new Set([...dealPhrases(deal), ...segments(deal.sector || '').filter(s => !isGenericSector(s))].filter(p => p.length > 2 && !GENERIC.has(p)))] : [];
+    // A deal classified in the deal's own niche is the clearest "bought in this space".
+    const topNiches = deal ? nichesOf(deal).slice(0, 2).map(x => x.niche) : [];
+    const nicheDeal = topNiches.length && (cand.acquisitions || []).find(a => topNiches.includes(Taxonomy.ofDeal(a)?.niche));
+    if (nicheDeal) return [1, `Bought ${nicheDeal.target}${nicheDeal.date || nicheDeal.year ? ` (${String(nicheDeal.date || nicheDeal.year).slice(0, 4)})` : ''} in ${Taxonomy.ofDeal(nicheDeal).niche}`];
     if (phrases.length) {
       const hit = (cand.acquisitions || []).find(a => { const t = ' ' + lower([a.industry, a.tags, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; return phrases.some(p => t.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ')); });
       if (hit) return [1, `Bought ${hit.target}${hit.date || hit.year ? ` (${String(hit.date || hit.year).slice(0, 4)})` : ''}${hit.industry ? ': ' + hit.industry : ''}`];
@@ -881,7 +928,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, nichesOf, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

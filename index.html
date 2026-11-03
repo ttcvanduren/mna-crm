@@ -72,7 +72,7 @@
           <select id="filterRole"><option value="">All roles</option></select>
           <select id="filterProject"><option value="">All projects</option></select>
           <select id="filterCountry"><option value="">All countries</option></select>
-          <select id="filterSector"><option value="">All sectors</option></select>
+          <select id="filterSector"><option value="">All industries</option></select>
           <select id="filterOwnership"><option value="">Any ownership</option></select>
           <select id="filterSize">
             <option value="">Any size</option>
@@ -110,7 +110,7 @@
               <th class="cb"><input type="checkbox" id="checkAllCompanies"></th>
               <th data-sort="name">Company</th>
               <th data-sort="role">Role</th>
-              <th data-sort="sector">Sector</th>
+              <th data-sort="niche">Industry / niche</th>
               <th data-sort="country">Country</th>
               <th data-sort="employees" class="num">Employees</th>
               <th data-sort="revenue" class="num">Revenue</th>
@@ -316,6 +316,7 @@
 
   <div id="toast"></div>
   <script src="store.js"></script>
+  <script src="taxonomy.js"></script>
   <script src="engine.js"></script>
   <script src="enrich.js"></script>
   <script src="app.js"></script>
