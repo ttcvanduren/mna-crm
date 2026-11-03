@@ -306,6 +306,18 @@ span.grade { cursor: default; color: #fff; border: 0; }
 .cs-svg circle[data-cs-pt]:hover { stroke-width: 3; }
 .cs-table td.cs-out { color: var(--warn); text-decoration: line-through; }
 .sw.b { background: #1d4ed8; }
+/* Pitches */
+.pitch-tabs { margin: 0 0 16px; }
+.pitch-tabs button { padding: 8px 16px; }
+.pb-table td { vertical-align: top; }
+.pb-why { width: 100%; font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; resize: vertical; }
+.pb-why.edited { border-color: var(--accent); background: var(--accent-soft); }
+.pb-search { position: relative; }
+.pb-search input { width: 260px; }
+#pbSuggest { position: absolute; right: 0; top: 100%; z-index: 5; background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); min-width: 300px; }
+#pbSuggest:empty { display: none; }
+.pb-hit { display: block; width: 100%; text-align: left; font: inherit; padding: 6px 10px; border: 0; background: none; cursor: pointer; }
+.pb-hit:hover { background: var(--accent-soft); }
 .seg tr[data-cind], .seg tr[data-creg] { cursor: pointer; }
 .seg tr:hover td, .seg tr.on td { background: #f5f8ff; }
 .seg-l { font-weight: 500; }

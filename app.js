@@ -138,6 +138,7 @@ function showTab(name) {
   if (name === 'dashboard') renderDashboard();
   if (name === 'comps') renderComps();
   if (name === 'market') renderMarket();
+  if (name === 'pitches') renderPitches();
   if (name === 'projects') renderProjects();
   if (name === 'companies') renderCompanies();
   if (name === 'email') renderEmail();
@@ -1569,7 +1570,7 @@ $('#signOut').addEventListener('click', async () => { try { const app = getMsal(
 
 // ---------- Backup ----------
 // A backup is the complete database: companies, projects, transactions and settings. It doubles as the master file.
-const backupData = () => ({ version: 5, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, transactions: state.transactions, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory });
+const backupData = () => ({ version: 5, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, pitches: state.pitches || [], transactions: state.transactions, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory });
 $('#backup').addEventListener('click', () => {
   const data = backupData();
   const a = document.createElement('a');
@@ -1597,6 +1598,12 @@ $('#restore').addEventListener('change', async e => {
     }
     syncProjectsFromCompanies();
     saveShared('projects', state.projects);
+    if (d.pitches?.length) {
+      const byId = new Map((state.pitches || []).map(p => [p.id, p]));
+      d.pitches.forEach(p => byId.set(p.id, p));
+      state.pitches = [...byId.values()];
+      saveShared('pitches', state.pitches);
+    }
     if (d.templates?.length) { state.templates = d.templates; saveShared('templates', state.templates); }
     if (d.weights) { state.weights = d.weights; saveShared('weights', state.weights); }
     if (d.mappingMemory) { state.mappingMemory = d.mappingMemory; saveShared('mappingMemory', state.mappingMemory); }
@@ -1651,11 +1658,12 @@ function renderAll() {
 // ---------- Start ----------
 async function loadData() {
   setSync('Loading…');
-  const [companies, templates, activity, weights, mapping, projects] = await Promise.all([
-    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null),
+  const [companies, templates, activity, weights, mapping, projects, pitches] = await Promise.all([
+    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null), Store.getState('pitches', null),
   ]);
   state.companies = companies.map(migrate);
   state.projects = projects || [];
+  state.pitches = pitches || [];
   syncProjectsFromCompanies();
   await loadTransactions();
   state.templates = templates?.length ? templates : [DEFAULT_TEMPLATE];

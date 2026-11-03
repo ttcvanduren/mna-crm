@@ -556,7 +556,7 @@ function renderComps() {
         <li>Export to Excel and import here (several files at once is fine). Columns are recognised automatically, S&P Capital IQ Pro field codes too; where the financials are missing, multiples are read from the deal summary. Re-importing updates instead of duplicating.</li></ol></div>`;
     return;
   }
-  if (cf.view === 'set') return renderCompSet();
+  if (cf.view === 'set') { csUse(null); return renderCompSet(); }
   const list = filteredTx();
   const s1 = stat(list.map(t => t.ev_revenue).filter(x => x != null)), s2 = stat(list.map(t => t.ev_ebitda).filter(x => x != null));
   const sizes = list.map(t => t.deal_value).filter(x => x > 0);

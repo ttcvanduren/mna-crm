@@ -16,7 +16,12 @@ let cs = (() => {
   } catch { /* private window or blocked storage */ }
   return csFresh();
 })();
-const csSave = () => { try { localStorage.setItem(CS_KEY, JSON.stringify(cs)); } catch { /* not critical */ } };
+// The same builder also runs inside a pitch (pitch.js): csUse(ctx, pitchState) points it at the pitch's own state and container.
+let csCtx = null, csOwn = null;
+function csUse(ctx, st) {
+  if (ctx) { if (!csCtx) csOwn = cs; cs = st; csCtx = ctx; } else if (csCtx) { cs = csOwn; csCtx = null; }
+}
+const csSave = () => { if (csCtx) return csCtx.save(); try { localStorage.setItem(CS_KEY, JSON.stringify(cs)); } catch { /* not critical */ } };
 const csTerms = s => String(s || '').toLowerCase().split(/[;,]+/).map(x => x.trim()).filter(Boolean);
 const csTxText = t => [t.target, t.description, t.tags, t.industry, t.summary].join(' ').toLowerCase();
 
@@ -279,8 +284,10 @@ function renderCompSet() {
   const th = (k, label, cls = 'num') => `<th class="${cls} sortable ${cs.sort === k ? 'on' : ''}" data-cs-sort="${k}">${label}${cs.sort === k ? ' ↓' : ''}</th>`;
   const mix = s ? csMix(s.used) : null;
 
-  $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">Value a company against ${state.transactions.length.toLocaleString()} transactions</div></div>
-      <div class="actions">${compsTabs()}<button class="btn" data-csx="reset">New company</button><button class="btn" data-csx="xlsx" ${s ? '' : 'disabled'}>Excel</button><button class="btn primary" data-csx="pdf" ${s ? '' : 'disabled'}>PDF slides</button></div></div>
+  const host = csCtx ? $(csCtx.el) : $('#compsView');
+  if (!host) return;
+  host.innerHTML = `${csCtx ? '' : `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">Value a company against ${state.transactions.length.toLocaleString()} transactions</div></div>
+      <div class="actions">${compsTabs()}<button class="btn" data-csx="reset">New company</button><button class="btn" data-csx="xlsx" ${s ? '' : 'disabled'}>Excel</button><button class="btn primary" data-csx="pdf" ${s ? '' : 'disabled'}>PDF slides</button></div></div>`}
 
     <div class="cs-grid">
       <div class="card">
@@ -320,7 +327,7 @@ function renderCompSet() {
           ${chk('noMined', 'Exclude multiples read from deal text')}${chk('done', 'Completed deals only')}${chk('minority', 'Include minority stakes')}
         </div>
         ${s ? `<p class="muted small">${s.m.pool.toLocaleString()} deals pass the filters · <b>${s.used.length}</b> in the comp set${cs.pin.length ? ` (${cs.pin.length} added by hand)` : ''}${cs.exc.length ? ` · ${cs.exc.length} excluded by hand <button class="link small" data-csx="clearexc">restore all</button>` : ''}. Untick a deal below, or click a dot in the chart, to exclude it.</p>` : '<p class="muted small">Fill in a description or tags (or read the website) to find comparable transactions.</p>'}
-        ${s ? `<h2 style="margin-top:10px">Export</h2><div class="cs-filters">${CS_SECTIONS.map(([k, l]) => `<label class="check"><input type="checkbox" data-css="${k}" ${cs.sections[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
+        ${s && !csCtx ? `<h2 style="margin-top:10px">Export</h2><div class="cs-filters">${CS_SECTIONS.map(([k, l]) => `<label class="check"><input type="checkbox" data-css="${k}" ${cs.sections[k] ? 'checked' : ''}> ${l}</label>`).join('')}</div>
           <p class="muted small">PDF slides open in a new tab: print → save as PDF (landscape). Excel has the summary with live formulas, every comparable deal in rows, the excluded deals and the next candidates.</p>` : ''}
       </div>
     </div>
@@ -370,13 +377,25 @@ function csRow(x, inSet, excluded = false) {
 }
 
 // ---------- PDF slides ----------
-function csSlides(s) {
-  const T = cs.target, name = T.name || 'Target', date = today(), sec = cs.sections, mix = csMix(s.used);
+const csSlide = (title, body, sub = '') => `<section class="slide"><div class="hd"><h2>${esc(title)}</h2>${sub ? `<div class="sub">${sub}</div>` : ''}</div><div class="bd">${body}</div></section>`;
+const csFacts = T => [T.sector, T.subsector, T.country, T.business_model].filter(Boolean).map(esc).join(' · ');
+const csCover = (name, lead, meta) => `<section class="slide title"><div class="brand">33 Equity</div><h1>${esc(name)}</h1><div class="lead">${esc(lead)}</div>${meta.filter(Boolean).map(m => `<div class="meta">${m}</div>`).join('')}</section>`;
+const csSlides = s => csOpenDeck(csSlideList(s, cs.sections), cs.target.name || 'Target', 'comparable transactions');
+
+// Slides for the comp set. Without financials (or with every method off) the summary shows the multiples instead of a valuation.
+function csSlideList(s, sec) {
+  const T = cs.target, name = T.name || 'Target', date = today(), mix = csMix(s.used);
   const slides = [];
-  const slide = (title, body, sub = '') => slides.push(`<section class="slide"><div class="hd"><h2>${esc(title)}</h2>${sub ? `<div class="sub">${sub}</div>` : ''}</div><div class="bd">${body}</div></section>`);
-  const fx = T => [T.sector, T.subsector, T.country, T.business_model].filter(Boolean).map(esc).join(' · ');
-  if (sec.title) slides.push(`<section class="slide title"><div class="brand">33 Equity</div><h1>${esc(name)}</h1><div class="lead">Comparable transactions analysis</div><div class="meta">${fx(T)}</div><div class="meta">${date}</div></section>`);
-  if (sec.summary) slide('Valuation summary', `<div class="row"><div class="col">
+  const slide = (title, body, sub = '') => slides.push(csSlide(title, body, sub));
+  const valued = s.methods.some(x => x.on);
+  if (sec.title) slides.push(csCover(name, 'Comparable transactions analysis', [csFacts(T), date]));
+  if (sec.summary && !valued) slide('Market multiples', `<div class="row"><div class="col">
+      <div class="kp">${[['Comparable deals', s.used.length], ['Median EV/Revenue', mult(s.rev.median)], ['Median EV/EBITDA', mult(s.ebitda.median)], ['Median deal value', s.used.some(x => x.t.deal_value) ? '$' + usdm(med(s.used.map(x => x.t.deal_value).filter(v => v > 0))) : '–']].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>
+      <table><tr><th>Multiple</th><th class="n">P25</th><th class="n">Median</th><th class="n">P75</th><th class="n">Deals</th></tr>
+      ${[['EV / Revenue', s.rev], ['EV / EBITDA', s.ebitda]].map(([k, st]) => `<tr><td>${k}</td><td class="n">${mult(st.p25)}</td><td class="n"><b>${mult(st.median)}</b></td><td class="n">${mult(st.p75)}</td><td class="n">${st.n}</td></tr>`).join('')}</table>
+      <h3>Closest transactions</h3><table class="tx">${[...s.used].sort(CS_SORT.fit).slice(0, 6).map(x => `<tr><td>${esc(String(x.t.date || x.t.year || '').slice(0, 7))}</td><td><b>${esc(x.t.target)}</b> <span class="muted">→ ${esc(splitBuyers(x.t.buyer)[0] || '')}</span></td><td class="n">${mult(x.t.ev_revenue)}</td><td class="n">${mult(x.t.ev_ebitda)}</td></tr>`).join('')}</table></div>
+      <div class="col">${csHist(s.used.filter(x => !x.outR).map(x => x.t.ev_revenue).filter(v => v != null), { w: 520, h: 300 })}</div></div>`, `EV/Revenue of the ${s.used.length} most comparable deals: median ${mult(s.rev.median)}, P25–P75 ${mult(s.rev.p25)}–${mult(s.rev.p75)}`);
+  if (sec.summary && valued) slide('Valuation summary', `<div class="row"><div class="col">
       <div class="kp">${[['Comparable deals', s.used.length], ['Median EV/Revenue', mult(s.rev.median)], ['Median EV/EBITDA', mult(s.ebitda.median)], ['Implied EV (mid)', s.blend ? eur(s.blend[1]) : '–']].map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>
       <table><tr><th>Method</th><th class="n">Metric</th><th class="n">P25</th><th class="n">Median</th><th class="n">P75</th><th class="n">Low – high EV</th></tr>
       ${s.methods.filter(x => x.on).map(x => `<tr><td>${x.label}</td><td class="n">${eur(x.metric)}</td><td class="n">${mult(x.s.p25)}</td><td class="n"><b>${mult(x.s.median)}</b></td><td class="n">${mult(x.s.p75)}</td><td class="n">${eur(x.range[0])} – ${eur(x.range[2])}</td></tr>`).join('')}</table>
@@ -409,7 +428,12 @@ function csSlides(s) {
       <li>Source: S&P Capital IQ and other transaction databases; deal amounts in USD, company figures in EUR. Some multiples are derived from deal announcements and are approximate.</li></ul>
       <p class="muted">Indicative only, based on public transaction data and the information provided; not a fairness opinion.</p></div></div>`);
   }
-  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} – comparable transactions ${date}</title><style>
+  return slides;
+}
+
+function csOpenDeck(slides, name, what) {
+  const date = today();
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} – ${esc(what)} ${date}</title><style>
     @page{size:297mm 167mm;margin:0}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     body{margin:0;background:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;color:#14181f;font-size:11.5px}
     .bar{position:sticky;top:0;background:#0f172a;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;z-index:2}.bar button{font:inherit;padding:6px 14px;border-radius:6px;border:0;background:#1d4ed8;color:#fff;cursor:pointer}
@@ -424,6 +448,8 @@ function csSlides(s) {
     table{border-collapse:collapse;width:100%;margin:6px 0}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:9.5px;color:#667085;text-transform:uppercase}
     .tx td{font-size:10.5px}.n{text-align:right;white-space:nowrap}.out{color:#dc6803}.muted{color:#667085}ul{margin:4px 0;padding-left:16px}li{margin:3px 0}
     .kp{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px}.kp div{border:1px solid #e6e8ec;border-radius:8px;padding:8px;text-align:center}.kp span{display:block;font-size:9.5px;color:#667085;text-transform:uppercase}.kp b{font-size:18px}
+    .tier{display:inline-block;min-width:18px;text-align:center;border-radius:4px;font-weight:700;font-size:9.5px;padding:1px 4px;color:#fff;background:#1d4ed8}.tier.t2{background:#6941c6}.tier.t3{background:#98a2b3}
+    .lead-text{font-size:13px;line-height:1.55;color:#344054}.box{border:1px solid #e6e8ec;border-radius:8px;padding:10px 12px;margin-bottom:8px}
     @media print{body{background:#fff}.bar{display:none}.slide{margin:0;box-shadow:none}}
   </style></head><body><div class="bar"><b>${slides.length} slides</b><span>Print → Save as PDF. Layout landscape; margins none.</span><button onclick="print()">Print / save as PDF</button></div>${slides.join('')}</body></html>`;
   const w = window.open('', '_blank');
@@ -433,7 +459,8 @@ function csSlides(s) {
 }
 
 // ---------- Excel ----------
-function csExcel(s) {
+const csExcel = s => XLSX.writeFile(csWorkbook(s), `comps-${(cs.target.name || 'target').replace(/[^\w-]+/g, '-').toLowerCase()}-${today()}.xlsx`);
+function csWorkbook(s) {
   const T = cs.target, f = cs.f, X = XLSX.utils;
   const COLS = [['In comp set', x => (x.pinned ? 'Added by hand' : 'Yes')], ['Fit', x => x.score], ['Date', x => x.t.date || x.t.year || ''], ['Target', x => x.t.target], ['Buyer', x => x.t.buyer || ''], ['Seller', x => x.t.seller || ''],
     ['Country', x => x.t.country || ''], ['Region', x => txRegion(x.t)], ['Industry', x => x.t.industry || ''], ['Tags', x => x.t.tags || ''], ['Status', x => x.t.status || ''],
@@ -482,7 +509,7 @@ function csExcel(s) {
   X.book_append_sheet(wb, sheetOf(s.m.ranked.filter(x => !used.some(u => u.t.key === x.t.key)).slice(0, 200), COLS.map(c => (c[0] === 'In comp set' ? ['In comp set', () => 'No'] : c))), 'Next candidates');
   const years = [...new Set(used.map(x => x.t.year).filter(Boolean))].sort();
   X.book_append_sheet(wb, X.aoa_to_sheet([['Year', 'Deals', 'Median EV/Revenue', 'Median EV/EBITDA'], ...years.map(y => { const ts = used.filter(x => x.t.year === y).map(x => x.t); return [y, ts.length, med(ts.map(t => t.ev_revenue).filter(v => v != null)) ?? '', med(ts.map(t => t.ev_ebitda).filter(v => v != null)) ?? '']; })]), 'By year');
-  XLSX.writeFile(wb, `comps-${(T.name || 'target').replace(/[^\w-]+/g, '-').toLowerCase()}-${today()}.xlsx`);
+  return wb;
 }
 
 // ---------- Events ----------
@@ -491,8 +518,9 @@ const csToggle = key => {
   if (cs.exc.includes(key)) cs.exc = cs.exc.filter(k => k !== key);
   else { cs.exc.push(key); cs.pin = cs.pin.filter(k => k !== key); }
 };
+const csActive = e => (csCtx ? !!e.target.closest(csCtx.el) : cf.view === 'set' && !!e.target.closest('#compsView'));
 document.addEventListener('click', e => {
-  if (cf.view !== 'set' || !e.target.closest('#compsView')) return;
+  if (!csActive(e)) return;
   const a = (s) => e.target.closest(`[${s}]`)?.getAttribute(s);
   const x = a('data-csx');
   if (x === 'read') return csReadWebsite(e.target.closest('button'));
@@ -516,7 +544,7 @@ document.addEventListener('click', e => {
   if (a('data-cs-row')) { const k = a('data-cs-row'); cs.open = cs.open === k ? null : k; return csRedraw(); }
 });
 document.addEventListener('change', e => {
-  if (cf.view !== 'set' || !e.target.closest('#compsView')) return;
+  if (!csActive(e)) return;
   const el = e.target, d = el.dataset;
   if (el.id === 'csProj') { if (el.value) csFromProject(el.value); return csRedraw(); }
   if (el.id === 'csTagAdd') { cs.target.tags = [...new Set([...cs.target.tags, ...el.value.split(/[;,]+/).map(x => x.trim()).filter(Boolean)])]; return csRedraw(); }
