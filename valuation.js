@@ -424,7 +424,7 @@ function gradeChip(g, k) { return `<span class="grade g${g}" ${k ? `data-gk="${k
 function renderValuationTab(proj, el) {
   if (!state.transactions.length) {
     el.innerHTML = `<div class="empty">No transactions yet. Import your Capital IQ transaction export first (it can be several files).<br><br>
-      <button class="btn primary" data-vx="gocomps">Go to Comps & valuation</button></div>`;
+      <button class="btn primary" data-goto="data">Go to Data &amp; sources</button></div>`;
     return;
   }
   const t = proj.target || {};
@@ -546,9 +546,10 @@ function txDetail(t) {
 
 function renderComps() {
   if (!$('#compsView')) return;
+  if (typeof renderData === 'function') renderData(); // source counts on the Data page follow every transaction change
   const all = state.transactions;
   if (!all.length) {
-    $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">No transactions yet</div></div>
+    $('#compsView').innerHTML = `<div class="page-head"><div><h1>${cf.view === 'set' ? 'Value a company' : 'Transactions'}</h1><div class="muted">No transactions yet</div></div>
       <div class="actions"><label class="btn primary">Import Capital IQ transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
       <div class="card narrow"><h2>Import your Capital IQ transactions</h2>
         <ol class="small"><li>In Capital IQ (classic or Pro): <b>Screening → Transactions</b>. Criteria: M&A, target industry Software, announced 2015–today, acquisition of whole company / majority.</li>
@@ -571,9 +572,8 @@ function renderComps() {
   const active = [cf.q && `“${cf.q}”`, cf.industry, cf.region, cf.buyer && `buyer: ${cf.buyer}`, (cf.from || cf.to) && `${cf.from || '…'}–${cf.to || '…'}`, (cf.minSize || cf.maxSize) && `size ${cf.minSize || 0}–${cf.maxSize || '∞'}m`].filter(Boolean);
   const th = (k, label) => `<th class="num sortable ${cf.sort === k ? 'on' : ''}" data-csort="${k}">${label}${cf.sort === k ? ' ↓' : ''}</th>`;
 
-  $('#compsView').innerHTML = `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
-      <div class="actions">${compsTabs()}<button class="btn" data-vx="buyers" title="Create a company for every acquirer, with its deal history">Add buyers to Companies</button><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn danger" data-vx="cleartx">Delete all</button>
-        <label class="btn primary">Import transactions<input type="file" id="txUpload" accept=".xlsx,.xls,.csv" multiple hidden></label></div></div>
+  $('#compsView').innerHTML = `<div class="page-head"><div><h1>Transactions</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
+      <div class="actions"><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn" data-goto="data" title="Import files, sources, master file">Import & sources →</button></div></div>
     <div class="filters">
       <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
       <select id="cfIndustry"><option value="">All industries</option>${allInd.map(c => `<option ${c === cf.industry ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
@@ -599,9 +599,6 @@ function renderComps() {
       <div class="card"><h2>By industry</h2>${segTable(industries, 'data-cind', cf.industry)}</div>
       <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
         <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
-      <div class="card span2"><div class="toolbar" style="margin-bottom:6px"><h2 style="margin:0">Sources</h2><span class="spacer"></span><button class="btn sm" data-vx="mastertx" title="All deals from all sources in one Excel file; it can be imported again later">Download master file</button></div>
-        <div class="buyers">${sourceCounts().map(([s, n]) => `<div class="buyer-row"><span>${esc(s)}</span><span class="muted small">${n.toLocaleString()} deals</span><button class="link small" data-csrc-del="${esc(s)}">remove</button></div>`).join('')}</div>
-        <p class="muted small">Import as many files as you like (S&P Capital IQ, classic Capital IQ, PitchBook, Mergermarket, your own Excel). Deals are matched on transaction ID, or on target + year, and merged; reported financials replace figures read from deal text.</p></div>
     </div>
     <div class="table-wrap"><table class="data tx-table"><thead><tr><th class="sortable ${cf.sort === 'date' ? 'on' : ''}" data-csort="date">Date${cf.sort === 'date' ? ' ↓' : ''}</th><th>Target</th><th>Buyer</th><th>Country</th>${th('size', 'Deal value')}<th class="num">Revenue</th><th class="num">EBITDA</th>${th('evr', 'EV/Rev')}${th('eve', 'EV/EBITDA')}</tr></thead><tbody>
       ${list.slice(0, cf.limit).map(t => { const b = splitBuyers(t.buyer), c = b.map(x => crm.get(Engine.normName(x))).find(Boolean);
@@ -763,7 +760,7 @@ document.addEventListener('click', e => {
   if (x === 'buyers') return addBuyersToCompanies();
   if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', limit: 200, open: null }); return renderComps(); }
   const cview = e.target.closest('[data-cview]')?.dataset.cview;
-  if (cview) { cf.view = cview; return renderComps(); }
+  if (cview) return showTab(cview === 'set' ? 'valuation' : 'transactions');
   if (e.target.closest('#compsView') && cf.view !== 'set') {
     if (e.target.closest('[data-open]')) return;
     const el = s => e.target.closest(`[${s}]`)?.getAttribute(s);

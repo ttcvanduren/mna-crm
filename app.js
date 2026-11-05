@@ -51,7 +51,7 @@ const state = {
   picked: new Set(), // companies tab selection
   roleFilter: new Set(),
   previewId: null,
-  sort: { key: 'name', dir: 1 },
+  sort: { key: 'relevance', dir: -1 },
   limit: 200,
   drawer: null, // { id, tab }
   queue: null,
@@ -145,11 +145,16 @@ function setSync(text, bad) {
 window.addEventListener('beforeunload', e => { if (dirty.size) { flush(); e.preventDefault(); } });
 
 // ---------- Tabs ----------
+// "Transactions" and "Value a company" are two menu items on the same page (the comps panel), each in its own view.
 function showTab(name) {
+  if (name === 'comps') name = cf.view === 'set' ? 'valuation' : 'transactions';
+  if (name === 'transactions' || name === 'valuation') cf.view = name === 'valuation' ? 'set' : 'db';
+  const panel = name === 'transactions' || name === 'valuation' ? 'comps' : name;
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + panel));
   if (name === 'dashboard') renderDashboard();
-  if (name === 'comps') renderComps();
+  if (panel === 'comps') renderComps();
+  if (name === 'data') renderData();
   if (name === 'market') renderMarket();
   if (name === 'pitches') renderPitches();
   if (name === 'projects') renderProjects();
@@ -200,7 +205,9 @@ function filteredCompanies() {
     (!email || Engine.hasEmail(c)) &&
     (!q || [c.name, (c.aliases || []).join(' '), c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, c.acquisition_focus, c.target_sectors, contactText(c)].join(' ').toLowerCase().includes(q)));
   const { key, dir } = state.sort;
-  const val = c => key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
+  // Default order: your project buyers first, then researched companies, then active acquirers; noise sinks to the bottom.
+  const relevance = c => (c.projects.length ? 1e6 + c.projects.length * 1e4 : 0) + (c.enrichment ? 5e3 : 0) + (c.niche ? 1e3 : 0) + Math.min(500, (c.acquisitions || []).length * 10) + c.contacts.length;
+  const val = c => key === 'relevance' ? relevance(c) : key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
   return list.sort((a, b) => {
     const x = val(a), y = val(b);
     if (x == null || x === '') return 1;
@@ -239,6 +246,7 @@ function renderCompanies() {
   $('#checkAllCompanies').checked = shown.length > 0 && shown.every(c => state.picked.has(c.id));
   renderBulkBar();
   renderFilterOptions();
+  renderData(); // keeps the source counts current when the Data page is open
 }
 
 // Niche (with its industry) instead of a broad label like "Application Software"; the label stays visible if there's no niche.
@@ -1370,7 +1378,7 @@ function currentDeal() {
 function renderEmail() {
   const deal = currentDeal();
   const ids = state.campaign.recipientIds;
-  $('#campaignInfo').innerHTML = deal ? `${state.campaign.project ? `Project <b>${esc(state.campaign.project)}</b> · sending moves each buyer to the next stage` : `Deal: <b>${esc(deal.name)}</b>`}` : 'No deal chosen. Pick buyers in a project or a company in the Match engine.';
+  $('#campaignInfo').innerHTML = deal ? `${state.campaign.project ? `Project <b>${esc(state.campaign.project)}</b> · sending moves each buyer to the next stage` : `Deal: <b>${esc(deal.name)}</b>`}` : 'No deal chosen. Pick buyers in a project or a company in Buyer search.';
   $('#recipientCount').textContent = `(${ids.length} companies · ${allSends().length} emails)`;
   if (!ids.includes(state.previewId)) state.previewId = ids[0] || null;
   $('#recipients').innerHTML = ids.map(id => {
@@ -1696,6 +1704,7 @@ function renderAll() {
   renderTemplates(state.templates[0].id);
   runMatch();
   renderAccount();
+  renderData();
 }
 
 // ---------- Start ----------

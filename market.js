@@ -98,7 +98,7 @@ function renderMarket() {
   const el = $('#marketView');
   if (!el) return;
   const d = marketData();
-  if (!d) { el.innerHTML = `<div class="page-head"><div><h1>Market heat map</h1></div></div><div class="empty">Import transactions under <b>Comps & valuation</b> first.</div>`; return; }
+  if (!d) { el.innerHTML = `<div class="page-head"><div><h1>Market heat map</h1></div></div><div class="empty">Import transactions under <b>Data &amp; sources</b> first.</div>`; return; }
   const rows = d.rows.slice(0, 40);
   if (mk.open && !rows.some(r => r.k === mk.open)) { const r = d.rows.find(x => x.k === mk.open); if (r) rows.unshift(r); }
   const regions = [...new Set(state.transactions.map(bigRegion))].sort();

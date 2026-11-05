@@ -123,7 +123,7 @@ function renderPitches() {
     <div class="seg-tabs pitch-tabs">${[['deals', '1. Company & comparable deals'], ['buyers', '2. Possible buyers'], ['deck', '3. Deck & notes']].map(([k, l]) => `<button class="${pv.tab === k ? 'on' : ''}" data-ptab="${k}">${l}</button>`).join('')}</div>
     <div id="pitchBody">${pv.tab === 'deals' ? '<div id="pitchDeals"></div>' : pv.tab === 'buyers' ? pitchBuyersHtml(p, sel) : pitchDeckHtml(p, sel)}</div>`;
   if (pv.tab === 'deals') {
-    if (!state.transactions.length) $('#pitchDeals').innerHTML = '<div class="empty">No transactions in the database yet. Import them on the Comps & valuation page.</div>';
+    if (!state.transactions.length) $('#pitchDeals').innerHTML = '<div class="empty">No transactions in the database yet. Import them under Data &amp; sources.</div>';
     else { csUse(pitchCtx(p), p.cs); renderCompSet(); }
   }
 }

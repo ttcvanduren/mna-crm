@@ -21,16 +21,23 @@
     <aside class="sidebar">
       <div class="brand"><span class="logo-mark">M&amp;A</span> CRM</div>
       <nav>
+        <div class="nav-group">Deals</div>
         <button class="tab active" data-tab="dashboard"><span class="ico">◉</span>Dashboard</button>
         <button class="tab" data-tab="projects"><span class="ico">◆</span>Projects</button>
         <div id="navProjects" class="nav-projects"></div>
-        <button class="tab" data-tab="companies"><span class="ico">▦</span>Companies</button>
         <button class="tab" data-tab="pitches"><span class="ico">✎</span>Pitches</button>
-        <button class="tab" data-tab="comps"><span class="ico">€</span>Comps & valuation</button>
-        <button class="tab" data-tab="market"><span class="ico">▦</span>Market heat map</button>
-        <button class="tab" data-tab="match"><span class="ico">◎</span>Match engine</button>
+        <div class="nav-group">Database</div>
+        <button class="tab" data-tab="companies"><span class="ico">▦</span>Companies</button>
+        <button class="tab" data-tab="transactions"><span class="ico">⇄</span>Transactions</button>
+        <div class="nav-group">Analysis</div>
+        <button class="tab" data-tab="match"><span class="ico">◎</span>Buyer search</button>
+        <button class="tab" data-tab="valuation"><span class="ico">€</span>Value a company</button>
+        <button class="tab" data-tab="market"><span class="ico">▤</span>Market heat map</button>
+        <div class="nav-group">Outreach</div>
         <button class="tab" data-tab="email"><span class="ico">✉</span>Email</button>
         <button class="tab" data-tab="activity"><span class="ico">≡</span>Activity</button>
+        <div class="nav-group">Admin</div>
+        <button class="tab" data-tab="data"><span class="ico">⇪</span>Data &amp; sources</button>
         <button class="tab" data-tab="settings"><span class="ico">⚙</span>Settings</button>
       </nav>
       <div class="sidebar-foot">
@@ -55,15 +62,9 @@
             <div id="companyCount" class="muted"></div>
           </div>
           <div class="actions">
-            <button class="btn" id="downloadTemplate">Template</button>
-            <button class="btn" id="findDuplicates">⧉ Duplicates</button>
             <button class="btn" id="addCompany">+ Add company</button>
-            <label class="btn" title="Import a research file made by Claude Code">✦ Import research
-              <input type="file" id="importResearch" accept=".json" hidden>
-            </label>
-            <label class="btn primary">Import Excel / CSV
-              <input type="file" id="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden>
-            </label>
+            <label class="btn" title="Import a research file made by Claude Code">✦ Import research<input type="file" data-relay="importResearch" accept=".json" hidden></label>
+            <label class="btn primary">Import list<input type="file" data-relay="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden></label>
           </div>
         </div>
 
@@ -127,7 +128,7 @@
 
       <!-- MATCH -->
       <section id="tab-match" class="panel">
-        <div class="page-head"><div><h1>Match engine</h1><div class="muted">Find buyers for a target, or targets for a buyer.</div></div></div>
+        <div class="page-head"><div><h1>Buyer search</h1><div class="muted">Find buyers for any company in the database, or targets for a buyer. For a mandate use Find buyers in the project; for a prospect use Pitches.</div></div></div>
         <div class="match-grid">
           <aside class="card">
             <h2>Find matches for</h2>
@@ -167,7 +168,7 @@
 
       <!-- EMAIL -->
       <section id="tab-email" class="panel">
-        <div class="page-head"><div><h1>Email</h1><div class="muted" id="campaignInfo">No recipients yet. Select companies in the Match engine.</div></div></div>
+        <div class="page-head"><div><h1>Email</h1><div class="muted" id="campaignInfo">No recipients yet. Select buyers in a project or in Buyer search.</div></div></div>
         <div class="email-grid">
           <div class="card">
             <label>Template
@@ -211,14 +212,63 @@
       </section>
 
       <!-- SETTINGS -->
-      <section id="tab-settings" class="panel">
-        <div class="page-head"><div><h1>Settings</h1></div></div>
-        <div class="settings-grid">
-          <div class="card span-all">
-            <h2>Connectors</h2>
-            <p class="muted small">Everything works without these. Each connector adds data or automation when set up.</p>
+      <!-- DATA & SOURCES: every way data comes in or goes out, in one place -->
+      <section id="tab-data" class="panel">
+        <div class="page-head"><div><h1>Data &amp; sources</h1><div class="muted">Everything that comes into the CRM, where it came from, and backups</div></div></div>
+        <div id="dataOverview"></div>
+        <div class="data-grid">
+          <div class="card">
+            <h2><span class="step">1</span> Company lists</h2>
+            <p class="muted small">Buyer lists and other Excel / CSV files. Columns are recognised automatically; existing companies are matched and updated, not duplicated.</p>
+            <div class="toolbar">
+              <label class="btn primary">Import Excel / CSV<input type="file" id="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden></label>
+              <button class="btn" id="downloadTemplate">Download template</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2><span class="step">2</span> Transactions</h2>
+            <p class="muted small">S&amp;P Capital IQ, PitchBook, Mergermarket or your own Excel. Deals are merged on transaction ID or target + year; acquirers can become companies.</p>
+            <div class="toolbar">
+              <label class="btn primary">Import transactions<input type="file" id="txUploadData" accept=".xlsx,.xls,.csv" multiple hidden></label>
+              <button class="btn" data-vx="buyers" title="Create a company for every acquirer, with its deal history">Add buyers to Companies</button>
+              <button class="btn" data-vx="mastertx" title="All deals from all sources in one Excel file; it can be imported again later">Download master file</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2><span class="step">3</span> Research (Claude)</h2>
+            <p class="muted small">Select companies on the Companies page → <b>✦ Export for research</b>, let Claude Code research the file, then import the results here (profiles, people, acquisitions, descriptions, industry &amp; niche).</p>
+            <div class="toolbar"><label class="btn primary">✦ Import research<input type="file" id="importResearch" accept=".json" hidden></label></div>
+            <div id="dataResearch" class="muted small"></div>
+          </div>
+          <div class="card">
+            <h2><span class="step">4</span> People &amp; connectors</h2>
+            <p class="muted small">Apollo for decision makers and verified emails. Everything works without connectors.</p>
             <div id="connectors" class="connectors"></div>
           </div>
+          <div class="card span-all">
+            <div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">Sources</h2><span class="spacer"></span><button class="btn sm" id="findDuplicates">⧉ Find duplicates</button></div>
+            <div id="dataSources"></div>
+          </div>
+          <div class="card">
+            <h2>Backup &amp; restore</h2>
+            <p class="muted small">A backup holds everything: companies, projects, pitches, transactions and templates. Restoring overwrites companies with the same ID and merges the rest.</p>
+            <div class="toolbar">
+              <button class="btn primary" id="backup">Download backup</button>
+              <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
+              <button class="btn" id="exportAll">Export all companies (Excel)</button>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Delete</h2>
+            <p class="muted small">Download a backup first. In the team database this deletes for everyone.</p>
+            <div class="toolbar"><button class="btn danger" id="wipe">Delete all companies</button><button class="btn danger" data-vx="cleartx">Delete all transactions</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-settings" class="panel">
+        <div class="page-head"><div><h1>Settings</h1><div class="muted">Team database, Claude and Outlook. Imports, sources and backups are under Data &amp; sources.</div></div></div>
+        <div class="settings-grid">
           <div class="card">
             <h2>Team database</h2>
             <div id="dbStatus" class="small"></div>
@@ -257,15 +307,6 @@
             </div>
           </div>
 
-          <div class="card">
-            <h2>Data</h2>
-            <div class="toolbar">
-              <button class="btn" id="backup">Download backup (JSON)</button>
-              <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
-              <button class="btn" id="exportAll">Export all companies (Excel)</button>
-            </div>
-            <button class="btn danger" id="wipe">Delete all companies</button>
-          </div>
         </div>
       </section>
     </main>
@@ -327,6 +368,7 @@
   <script src="valuation.js"></script>
   <script src="compset.js"></script>
   <script src="pitch.js"></script>
+  <script src="datahub.js"></script>
   <script src="market.js"></script>
 </body>
 </html>

@@ -286,8 +286,8 @@ function renderCompSet() {
 
   const host = csCtx ? $(csCtx.el) : $('#compsView');
   if (!host) return;
-  host.innerHTML = `${csCtx ? '' : `<div class="page-head"><div><h1>Comps & valuation</h1><div class="muted">Value a company against ${state.transactions.length.toLocaleString()} transactions</div></div>
-      <div class="actions">${compsTabs()}<button class="btn" data-csx="reset">New company</button><button class="btn" data-csx="xlsx" ${s ? '' : 'disabled'}>Excel</button><button class="btn primary" data-csx="pdf" ${s ? '' : 'disabled'}>PDF slides</button></div></div>`}
+  host.innerHTML = `${csCtx ? '' : `<div class="page-head"><div><h1>Value a company</h1><div class="muted">Comparable transactions, multiples and a valuation range from ${state.transactions.length.toLocaleString()} deals</div></div>
+      <div class="actions"><button class="btn" data-csx="reset">New company</button><button class="btn" data-csx="xlsx" ${s ? '' : 'disabled'}>Excel</button><button class="btn primary" data-csx="pdf" ${s ? '' : 'disabled'}>PDF slides</button></div></div>`}
 
     <div class="cs-grid">
       <div class="card">
