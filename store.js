@@ -9,16 +9,41 @@ const Store = (() => {
   const mode = url && anonKey && window.supabase ? 'cloud' : 'local';
 
   // ---------- Browser storage ----------
+  // Version 2: companies are stored one record per company (store "companies"), so saving one change writes
+  // one record instead of the whole database. Version 1 kept them as one big array under kv "companies".
   const idb = {
     _db: null,
     open() {
       if (this._db) return Promise.resolve(this._db);
       return new Promise((res, rej) => {
-        const r = indexedDB.open('mna-crm', 1);
-        r.onupgradeneeded = () => r.result.createObjectStore('kv');
+        const r = indexedDB.open('mna-crm', 2);
+        r.onupgradeneeded = () => {
+          const db = r.result;
+          if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          if (!db.objectStoreNames.contains('companies')) db.createObjectStore('companies', { keyPath: 'id' });
+        };
         r.onsuccess = () => res((this._db = r.result));
         r.onerror = () => rej(r.error);
       });
+    },
+    async all(store) {
+      const db = await this.open();
+      return new Promise((res, rej) => { const q = db.transaction(store).objectStore(store).getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); });
+    },
+    // Writes and deletes in one transaction.
+    async write(store, puts = [], dels = []) {
+      const db = await this.open();
+      return new Promise((res, rej) => {
+        const tx = db.transaction(store, 'readwrite'), os = tx.objectStore(store);
+        puts.forEach(v => os.put(v));
+        dels.forEach(k => os.delete(k));
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+    },
+    async del(k) {
+      const db = await this.open();
+      return new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').delete(k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
     },
     async get(k, fallback) {
       const db = await this.open();
@@ -66,8 +91,17 @@ const Store = (() => {
   }
   async function signOut() { if (sb) await sb.auth.signOut(); user = null; }
 
+  // Browser storage: one record per company. Data saved by the old version (one big array) is moved over once.
+  async function localLoad() {
+    const list = await idb.all('companies');
+    if (list.length) return list;
+    const old = await idb.get('companies', []);
+    if (old.length) { await idb.write('companies', old); await idb.del('companies'); }
+    return old;
+  }
+
   async function loadCompanies() {
-    if (mode === 'local') return idb.get('companies', []);
+    if (mode === 'local') return localLoad();
     const out = [];
     for (let from = 0; ; from += 1000) {
       const res = await sb.from('companies').select('id,data').order('id').range(from, from + 999);
@@ -80,7 +114,7 @@ const Store = (() => {
 
   // `changed` is what to write to the cloud; `all` is the full list for browser storage.
   async function saveCompanies(changed, all) {
-    if (mode === 'local') return idb.set('companies', all.map(strip));
+    if (mode === 'local') return idb.write('companies', changed.map(strip));
     const now = new Date().toISOString();
     for (const part of chunks(changed, 300)) {
       check(await sb.from('companies').upsert(part.map(c => ({ id: c.id, data: strip(c), updated_at: now, updated_by: user?.email || null }))));
@@ -88,7 +122,7 @@ const Store = (() => {
   }
 
   async function deleteCompanies(ids, all) {
-    if (mode === 'local') return idb.set('companies', all.map(strip));
+    if (mode === 'local') return idb.write('companies', [], ids);
     for (const part of chunks(ids, 200)) check(await sb.from('companies').delete().in('id', part));
   }
 
@@ -115,7 +149,7 @@ const Store = (() => {
   }
 
   // Data that was kept in this browser before the team database was connected.
-  const localCompanies = () => idb.get('companies', []);
+  const localCompanies = () => localLoad();
 
   return {
     mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies,

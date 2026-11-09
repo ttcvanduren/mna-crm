@@ -91,14 +91,41 @@ function classify(c) {
 // Industry > niche from the taxonomy (taxonomy.js) instead of broad labels like "Application Software".
 // A niche you (or research) set is kept; an automatic one (niche_auto) is re-derived as texts change.
 function classifyNiche(c) {
-  if (c.niche && !c.niche_auto) { c.industry ||= Taxonomy.industryOf(c.niche); return; }
-  // Only re-derive when the texts changed (a signature is stored with the company), so loading stays fast.
-  const sig = [c.sector, c.subsector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|').length + ':' + String(c.short_description || '').slice(0, 40) + ':' + String(c.description || '').slice(0, 40) + ':' + (c.subsector || '');
-  if (c.niche_sig === sig) return;
+  // Only re-derive when the texts (or a hand-set niche) changed: a signature is stored with the company, and so are
+  // its top niches (c.niches), which the match engine reads instead of classifying every company again.
+  const sig = [c.sector, c.subsector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|').length + ':' + String(c.short_description || '').slice(0, 40) + ':' + String(c.description || '').slice(0, 40) + ':' + (c.subsector || '') + ':' + (c.niche_auto ? '' : c.niche || '') + ':v' + Taxonomy.VERSION;
+  if (c.niche_sig === sig && c.niches) { if (c.niche && !c.niche_auto) c.industry ||= Taxonomy.industryOf(c.niche); return; }
   c.niche_sig = sig;
-  const n = Taxonomy.classify(c)[0];
+  nicheChanged.add(c.id);
+  const list = Taxonomy.classify(c);
+  c.niches = list.slice(0, 3).map(({ niche, industry, score }) => ({ niche, industry, score }));
+  if (c.niche && !c.niche_auto) { c.industry ||= Taxonomy.industryOf(c.niche); return; }
+  const n = list[0];
   if (n) Object.assign(c, { niche: n.niche, industry: n.industry, niche_auto: true });
   else if (c.niche_auto) { delete c.niche; delete c.industry; delete c.niche_auto; }
+}
+// Every deal gets its niche classified once (Taxonomy.ofDeal stores it on the deal). Done in small slices while the
+// page is idle so it never blocks you; in browser storage the result is saved, so later buyer searches start fast.
+// In the team database it stays in memory (saving would upload every company).
+// Companies whose niches were re-derived while loading (not saved yet).
+const nicheChanged = new Set();
+function backfillDealNiches() {
+  const isTodo = c => nicheChanged.has(c.id) || (c.acquisitions || []).some(a => a.nv !== Taxonomy.VERSION);
+  nicheChanged.clear();
+  const list = state.companies.slice();
+  let i = 0;
+  const idle = window.requestIdleCallback || (fn => setTimeout(() => fn({ timeRemaining: () => 8, didTimeout: false }), 30));
+  const step = deadline => {
+    const changed = [];
+    while (i < list.length && (deadline.timeRemaining() > 3 || deadline.didTimeout) && changed.length < 400) {
+      const c = list[i++];
+      if (isTodo(c)) { (c.acquisitions || []).forEach(a => Taxonomy.ofDeal(a)); changed.push(c); }
+      Engine.warm(c); // prepares the buyer-search data for this company
+    }
+    if (changed.length && Store.mode === 'local') touch(...changed);
+    if (i < list.length) idle(step, { timeout: 1000 }); else state.warmed = true;
+  };
+  idle(step, { timeout: 1000 });
 }
 function newCompany(name) {
   return migrate({ id: uid(), name, created: new Date().toISOString(), status: 'New', contacts: [], projects: [], sources: [] });
@@ -146,22 +173,34 @@ window.addEventListener('beforeunload', e => { if (dirty.size) { flush(); e.prev
 
 // ---------- Tabs ----------
 // "Transactions" and "Value a company" are two menu items on the same page (the comps panel), each in its own view.
+// The menu and page switch at once; the page itself is drawn right after the browser has painted that switch,
+// so clicking always feels instant even when a page takes a moment (a thin bar in the top bar shows it's working).
+let tabToken = 0;
 function showTab(name) {
   if (name === 'comps') name = cf.view === 'set' ? 'valuation' : 'transactions';
   if (name === 'transactions' || name === 'valuation') cf.view = name === 'valuation' ? 'set' : 'db';
   const panel = name === 'transactions' || name === 'valuation' ? 'comps' : name;
   $$('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
   $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + panel));
-  if (name === 'dashboard') renderDashboard();
-  if (panel === 'comps') renderComps();
-  if (name === 'data') renderData();
-  if (name === 'market') renderMarket();
-  if (name === 'pitches') renderPitches();
-  if (name === 'projects') renderProjects();
-  if (name === 'companies') renderCompanies();
-  if (name === 'email') renderEmail();
-  if (name === 'activity') renderActivity();
-  if (name === 'match') runMatch();
+  if (typeof onTabShown === 'function') onTabShown(name);
+  const token = ++tabToken;
+  document.body.classList.add('busy');
+  requestAnimationFrame(() => setTimeout(() => {
+    if (token !== tabToken) return; // another page was clicked meanwhile
+    try {
+      if (name === 'dashboard') renderDashboard();
+      if (panel === 'comps') renderComps();
+      if (name === 'data') renderData();
+      if (name === 'market') renderMarket();
+      if (name === 'pitches') renderPitches();
+      if (name === 'projects') renderProjects();
+      if (name === 'companies') renderCompanies();
+      if (name === 'email') renderEmail();
+      if (name === 'activity') renderActivity();
+      if (name === 'match') runMatch();
+    } finally { if (token === tabToken) document.body.classList.remove('busy'); }
+    if (typeof onTabShown === 'function') onTabShown(name);
+  }, 0));
 }
 $$('.tab').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab === 'projects') state.projectView = null; showTab(b.dataset.tab); }));
 
@@ -552,6 +591,63 @@ function buyerProfileHtml(c, compact = false) {
     <div class="bp-row"><span class="muted small">Activity</span><div class="small">${p.n} acquisitions · ${p.recent} in the last 5 years${p.last ? ` · last ${p.last}` : ''}</div></div></div>`;
 }
 
+// Acquisitions tab: a short summary, what they buy (niches you can filter on), deals per year, and one deal table.
+// Click a row for the details (description, topics, deal summary, seller, source).
+function acquisitionsTabHtml(c) {
+  const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.date || b.year || '').localeCompare(String(a.date || a.year || '')));
+  const notes = Engine.listAcquisitionNotes(c);
+  const notesHtml = notes.length ? `<details class="list-notes"${acq.length ? '' : ' open'}><summary><b>📝 Mentioned in your lists (${notes.length})</b></summary>${notes.map(n => `<div class="ln"><span>${esc(n.text)}</span><span class="muted small">${esc(n.from)}</span></div>`).join('')}</details>` : '';
+  if (!acq.length) return notesHtml + `<div class="empty">${c.acq_checked_at ? 'Research found no deals (checked ' + esc(String(c.acq_checked_at).slice(0, 10)) + ').' : `Not researched yet.${notes.length ? ' The notes above come from your own lists;' : ''} Research fills in the full deal list with dates, niche, size and sources (Export for research).`}</div>`;
+
+  const p = Engine.acquisitionProfile(c), now = new Date().getFullYear();
+  const yearOf = a => +String(a.date || a.year || '').slice(0, 4) || null;
+  const nicheOf = a => Taxonomy.ofDeal(a)?.niche || '';
+  const f = state.drawer.acqNiche || '';
+  const shown = f ? acq.filter(a => nicheOf(a) === f) : acq;
+  const niches = p.niches.filter(([k]) => k);
+  // Deals per year, last 10 years.
+  const perYear = Array.from({ length: 10 }, (_, i) => now - 9 + i).map(y => [y, acq.filter(a => yearOf(a) === y).length]);
+  const maxY = Math.max(1, ...perYear.map(x => x[1]));
+  const sizeOf = a => [a.deal_value && (/^\d/.test(String(a.deal_value)) ? `$${a.deal_value}` : a.deal_value), a.ev_revenue && `${a.ev_revenue}x rev`, a.ev_ebitda && `${a.ev_ebitda}x EBITDA`].filter(Boolean).join(' · ');
+  const kpi = (k, v) => `<div class="acq-kpi"><span>${k}</span><b>${v}</b></div>`;
+  const median = p.medianSize != null ? `$${Engine.fmt(p.medianSize)}m` : '–';
+  const hasSize = shown.some(a => sizeOf(a)); // the Size column only appears when some deal has a value
+
+  return `<div class="acq-kpis">${kpi('Deals', acq.length)}${kpi('Last 5 years', p.recent)}${kpi('Most recent', esc(String(acq[0].date || acq[0].year || '–').slice(0, 7)))}${kpi('Median deal size', median)}</div>
+    <div class="acq-overview">
+      <div>
+        ${c.acquisition_focus ? `<p class="small" style="margin:0 0 8px">${esc(c.acquisition_focus)}</p>` : ''}
+        ${niches.length ? `<div class="bp-row"><span class="muted small">Niches bought</span><div class="chips">${niches.slice(0, 8).map(([k, n]) => `<button class="chip purple ${f === k ? 'on' : ''}" data-acqniche="${esc(k)}" title="Show only these deals">${esc(k)}${n > 1 ? ` ×${n}` : ''}</button>`).join('')}</div></div>` : ''}
+        ${p.countries.length ? `<div class="bp-row"><span class="muted small">Countries</span><div class="chips">${p.countries.slice(0, 6).map(([k, n]) => `<span class="chip">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('')}</div></div>` : ''}
+        ${p.sizes.length ? `<div class="bp-row"><span class="muted small">Deal sizes</span><div class="small">$${Engine.fmt(p.minSize)}m – $${Engine.fmt(p.maxSize)}m (${p.sizes.length} disclosed)</div></div>` : ''}
+      </div>
+      <div class="acq-years" title="Deals per year">${perYear.map(([y, n]) => `<div class="ay"><i style="height:${Math.round((n / maxY) * 100)}%" title="${y}: ${n} deal${n === 1 ? '' : 's'}"></i><span>${String(y).slice(2)}</span></div>`).join('')}</div>
+    </div>
+    ${f ? `<div class="acq-filter">Showing ${shown.length} of ${acq.length} deals in <b>${esc(f)}</b> <button class="link small" data-acqniche="">show all</button></div>` : ''}
+    <table class="acq-table"><thead><tr><th>Date</th><th>Target</th><th>Niche</th><th>Country</th>${hasSize ? '<th class="num">Size</th>' : ''}<th></th></tr></thead><tbody>
+      ${shown.map(a => {
+        const i = acq.indexOf(a), open = state.drawer.acqOpen === i, n = nicheOf(a);
+        const site = a.target_website ? Engine.cleanUrl(a.target_website) : '';
+        return `<tr class="acq-row ${open ? 'open' : ''}" data-acqrow="${i}">
+          <td class="nowrap small">${esc(String(a.date || a.year || '–').slice(0, 7))}</td>
+          <td><b>${esc(a.target)}</b>${a.via ? ` <span class="muted small">via ${esc(a.via)}</span>` : ''}<div class="muted small acq-desc">${esc(a.description || a.industry || '')}</div></td>
+          <td>${n ? `<span class="chip purple">${esc(n)}</span>` : a.industry ? `<span class="muted small">${esc(String(a.industry).slice(0, 40))}</span>` : ''}</td>
+          <td class="small">${esc(a.country || '')}</td>
+          ${hasSize ? `<td class="num small">${esc(sizeOf(a))}</td>` : ''}
+          <td class="nowrap">${site ? `<a href="${esc(site)}" target="_blank" rel="noopener" title="Website">🌐</a> ` : ''}${a.source_url ? `<a href="${esc(a.source_url)}" target="_blank" rel="noopener" title="Source">↗</a>` : ''}</td></tr>
+          ${open ? `<tr class="acq-detail"><td colspan="${hasSize ? 6 : 5}">
+            ${a.description ? `<p>${esc(a.description)}</p>` : ''}
+            <div class="small muted">${esc([a.type, a.stake && `stake ${a.stake}`, a.seller && `from ${a.seller}`, a.target_revenue && `revenue ${a.target_revenue}`, a.target_employees && `${a.target_employees} employees`, a.status].filter(Boolean).join(' · '))}</div>
+            ${a.tags ? `<div class="chips" style="margin-top:6px">${String(Array.isArray(a.tags) ? a.tags.join(', ') : a.tags).split(', ').slice(0, 10).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>` : ''}
+            ${a.why ? `<p class="small" style="margin-top:8px"><b>Deal summary:</b> ${esc(a.why)}</p>` : ''}
+            ${a.source_url ? `<a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">Source ↗</a>` : a.source ? `<span class="small muted">Source: ${esc(a.source)}</span>` : ''}</td></tr>` : ''}`;
+      }).join('')}
+    </tbody></table>
+    ${c.acq_notes ? `<p class="muted small">${esc(c.acq_notes)}</p>` : ''}
+    ${notesHtml}
+    ${c.acq_checked_at ? `<p class="muted small">Deals researched ${esc(String(c.acq_checked_at).slice(0, 10))}.</p>` : ''}`;
+}
+
 function openDrawer(id, tab = 'overview') {
   state.drawer = { id, tab };
   $('#drawer').hidden = false;
@@ -641,34 +737,7 @@ function renderDrawer() {
       <button class="btn primary" data-act="people">👤 Find decision makers${apolloConfigured() ? ' (Apollo)' : ''}</button></div>` + body;
     body += `<p class="muted small" style="margin-top:12px">${apolloConfigured() ? 'Apollo search is free; revealing an email costs 1 credit.' : 'Without the Apollo API this exports a request file for Claude Code + Apollo; import the result with ✦ Import research.'}</p>`;
   } else if (tab === 'acquisitions') {
-    const acq = [...(c.acquisitions || [])].sort((a, b) => String(b.date || b.year || '').localeCompare(String(a.date || a.year || '')));
-    const years = acq.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
-    const recent = years.filter(y => y >= new Date().getFullYear() - 5).length;
-    const inds = Object.entries(acq.reduce((m, a) => { if (a.industry) m[a.industry] = (m[a.industry] || 0) + 1; return m; }, {})).sort((a, b) => b[1] - a[1]).slice(0, 6);
-    const notes = Engine.listAcquisitionNotes(c);
-    const notesHtml = notes.length ? `<div class="list-notes"><h3 style="margin-top:0">📝 Mentioned in your lists</h3>${notes.map(n => `<div class="ln"><span>${esc(n.text)}</span><span class="muted small">${esc(n.from)}</span></div>`).join('')}</div>` : '';
-    body = notesHtml + (acq.length ? `<h3>Researched deals</h3><div class="facts" style="margin-top:0">
-        <div class="fact"><div class="k">Deals recorded</div><div class="v">${acq.length}</div></div>
-        <div class="fact"><div class="k">Last 5 years</div><div class="v">${recent}</div></div>
-        <div class="fact"><div class="k">Most recent</div><div class="v">${esc(String(acq[0].date || acq[0].year || '–'))}</div></div>
-        <div class="fact"><div class="k">Acquisitive</div><div class="v">${esc(c.acquisitive || c.enrichment?.is_acquisitive || '–')}</div></div>
-      </div>
-      ${inds.length ? `<div class="chips" style="margin:10px 0">${inds.map(([k, n]) => `<span class="chip purple">${esc(k)}${n > 1 ? ` ×${n}` : ''}</span>`).join('')}</div>` : ''}
-      ${buyerProfileHtml(c)}
-      ${c.acq_notes ? `<p class="muted small">${esc(c.acq_notes)}</p>` : ''}
-      <div class="timeline">${acq.map(a => {
-        const size = [a.deal_value && `Deal value ${a.deal_value}`, a.target_revenue && `Revenue ${a.target_revenue}`, a.ev_revenue && `${a.ev_revenue}x revenue`, a.ev_ebitda && `${a.ev_ebitda}x EBITDA`, a.target_employees && `${a.target_employees} employees`, a.seller && `from ${a.seller}`].filter(Boolean).join(' · ');
-        const site = a.target_website ? Engine.cleanUrl(a.target_website) : '';
-        return `<div class="tl-item"><div class="tl-year">${esc(a.date || a.year || 'Date unknown')}${a.type ? ` · ${esc(a.type)}` : ''}${a.stake ? ` · ${esc(a.stake)}` : ''}${a.via ? ` · via ${esc(a.via)}` : ''}</div>
-        <div class="co-line"><b>${esc(a.target)}</b>${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener">↗ ${esc(Engine.domainOf(site))}</a>` : ''}
-          ${a.industry ? `<span class="chip purple">${esc(a.industry)}</span>` : ''}${a.country ? `<span class="chip">${esc(a.country)}</span>` : ''}</div>
-        ${size ? `<div class="small"><b>${esc(size)}</b></div>` : ''}
-        <div class="muted">${esc(a.description || '')}${a.source_url ? ` <a class="small" href="${esc(a.source_url)}" target="_blank" rel="noopener">source ↗</a>` : a.source ? ` <span class="small">(${esc(a.source)})</span>` : ''}</div>
-        ${a.tags ? `<div class="chips" style="margin-top:4px">${String(a.tags).split(', ').slice(0, 8).map(x => `<span class="chip">${esc(x)}</span>`).join('')}</div>` : ''}
-        ${a.why ? `<details class="small" style="margin-top:4px"><summary>Deal summary: why and how it was acquired</summary><p>${esc(a.why)}</p></details>` : ''}</div>`;
-      }).join('')}</div>
-      ${c.acq_checked_at ? `<p class="muted small">Researched ${esc(String(c.acq_checked_at).slice(0, 10))}.</p>` : ''}`
-      : `<div class="empty">${c.acq_checked_at ? 'Research found no deals (checked ' + esc(String(c.acq_checked_at).slice(0, 10)) + ').' : `Not researched yet.${notes.length ? ' The notes above come from your own lists;' : ''} Research fills in the full deal list with dates, industry, size and sources (ask Claude Code, or Export for research).`}</div>`);
+    body = acquisitionsTabHtml(c);
   } else if (tab === 'projects') {
     body = c.projects.map(p => `<div class="proj">
       <b>${esc(p.project || 'Project')}</b> <span class="muted small">${esc(state.projects.find(x => x.name === p.project)?.client || '')}</span> ${stageChip(p.status)}
@@ -711,8 +780,14 @@ function renderDrawer() {
     <div class="drawer-body">${body}</div>`;
 }
 $('#drawer').addEventListener('click', e => {
+  if (!state.drawer) return;
+  // Acquisitions tab: filter on a niche, open a deal row (links inside a row still work).
+  const niche = e.target.closest('[data-acqniche]');
+  if (niche) { state.drawer.acqNiche = state.drawer.acqNiche === niche.dataset.acqniche ? '' : niche.dataset.acqniche; state.drawer.acqOpen = null; return renderDrawer(); }
+  const row = e.target.closest('[data-acqrow]');
+  if (row && !e.target.closest('a')) { const i = +row.dataset.acqrow; state.drawer.acqOpen = state.drawer.acqOpen === i ? null : i; return renderDrawer(); }
   const t = e.target.closest('[data-dtab],[data-act]');
-  if (!t || !state.drawer) return;
+  if (!t) return;
   const id = state.drawer.id;
   if (t.dataset.dtab) { state.drawer.tab = t.dataset.dtab; return renderDrawer(); }
   const act = t.dataset.act;
@@ -1724,6 +1799,7 @@ async function loadData() {
   state.mappingMemory = mapping || {};
   setSync(`${state.companies.length.toLocaleString()} companies loaded`);
   renderAll();
+  setTimeout(backfillDealNiches, 2000);
 }
 
 // Starts after all scripts (including projects.js) have loaded.

@@ -60,12 +60,17 @@ function stackBar(groups, total) {
 }
 
 // ---------- Rendering ----------
+// Active mandates under Projects in the menu, each with its own colour dot.
+const NAV_DOTS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#22d3ee', '#fb923c'];
 function renderProjectNav() {
-  $('#navProjects').innerHTML = state.projects.filter(p => p.status === 'Active').map(p =>
-    `<button class="subtab ${state.projectView === p.name ? 'active' : ''}" data-nav-project="${esc(p.name)}">${esc(p.name)}</button>`).join('');
+  const active = state.projects.filter(p => p.status === 'Active');
+  $('#navProjects').innerHTML = active.map((p, i) =>
+    `<button class="subtab ${state.projectView === p.name ? 'active' : ''}" data-nav-project="${esc(p.name)}" title="${esc([p.name, p.client].filter(Boolean).join(' · '))}"><i style="background:${NAV_DOTS[i % NAV_DOTS.length]}"></i><span>${esc(p.name)}</span></button>`).join('');
+  const count = $('#navProjectCount');
+  if (count) count.textContent = active.length || '';
 }
 $('#navProjects').addEventListener('click', e => {
-  const n = e.target.dataset.navProject;
+  const n = e.target.closest('[data-nav-project]')?.dataset.navProject;
   if (n === undefined) return;
   state.projectView = n;
   showTab('projects');

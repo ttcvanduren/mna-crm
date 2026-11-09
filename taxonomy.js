@@ -29,10 +29,10 @@ const Taxonomy = (() => {
     ['IT management & infrastructure', 'IT service management', ['it service management', 'itsm', 'service desk', 'itom', 'it asset management', 'itam', 'enterprise service management', 'endpoint management', 'saas management', 'servicenow']],
     ['IT management & infrastructure', 'Observability & monitoring', ['observability', 'application performance monitoring', 'apm', 'log management', 'infrastructure monitoring', 'network monitoring']],
     ['IT management & infrastructure', 'DevOps & developer tools', ['devops', 'ci/cd', 'developer tools', 'version control', 'test automation', 'software testing', 'code quality', 'api testing']],
-    ['IT management & infrastructure', 'Cloud & hosting', ['web hosting', 'cloud hosting', 'managed hosting', 'cloud infrastructure', 'data centre', 'data center', 'domain names', 'iaas', 'sovereign cloud', 'cloud provider', 'gpu cloud', 'ai infrastructure']],
+    ['IT management & infrastructure', 'Cloud & hosting', ['web hosting', 'cloud hosting', 'managed hosting', 'cloud infrastructure', 'data centre', 'data center', 'domain names', 'iaas', 'sovereign cloud', 'cloud provider', 'gpu cloud', 'ai infrastructure', 'object storage', 'storage software', 'edge computing', 'hyperconverged']],
     ['IT management & infrastructure', 'Workload automation & output', ['workload automation', 'job scheduling', 'output management', 'mainframe']],
     ['Cybersecurity', 'Identity & access management', ['identity and access management', 'iam', 'authentication', 'single sign-on', 'privileged access', 'identity governance', 'multi-factor authentication']],
-    ['Cybersecurity', 'Security software', ['cybersecurity', 'cyber security', 'endpoint security', 'email security', 'network security', 'threat detection', 'siem', 'security operations', 'vulnerability management', 'data security', 'zero trust']],
+    ['Cybersecurity', 'Security software', ['cybersecurity', 'cyber security', 'endpoint security', 'email security', 'network security', 'threat detection', 'siem', 'security operations', 'vulnerability management', 'data security', 'zero trust', 'encryption', 'end-to-end encryption', 'digital rights management', 'drm', 'anti-fraud', 'fraud detection']],
     ['Cybersecurity', 'GRC & compliance', ['governance, risk', 'grc', 'risk management software', 'compliance management', 'audit management', 'whistleblowing', 'regtech', 'internal control', 'policy management']],
     ['Content, documents & collaboration', 'Document & content management', ['document management', 'dms', 'enterprise content management', 'ecm', 'archiving', 'records management', 'content services']],
     ['Content, documents & collaboration', 'Customer communications (CCM)', ['customer communications management', 'ccm', 'document generation', 'omnichannel communication', 'output and print']],
@@ -107,19 +107,24 @@ const Taxonomy = (() => {
       [c.subsector, 5],
       [[isGeneric(c.sector) ? '' : c.sector, (c.tags || []).join(' ; '), c.keywords].join(' ; '), 3],
       [c.short_description, 2],
-      [[c.description, c.summary].join(' '), 1],
+      [[String(c.description || '').slice(0, 1200), String(c.summary || '').slice(0, 1200)].join(' '), 1],
     ]);
     // The main niche may rest on one mention if nothing competes with it; further niches need real evidence.
     const keep = s.filter((x, i) => !set.some(y => y.niche === x.niche) && (x.score >= 2 || (i === 0 && (s[1]?.score || 0) < x.score)));
     return [...set, ...keep].slice(0, 4);
   }
   // Niche of one acquisition (from its industry, tags and description).
-  const dealCache = new WeakMap();
+  // Classifying ~50,000 deals is the slow part of a first buyer search, so the result is stored on the deal itself
+  // (a.niche, '' = none; a.nv = taxonomy version) and only the start of long deal texts is read.
+  const VERSION = 3; // raise when synonyms change, so stored deal niches are re-derived
+  // One shared result object per niche (ofDeal is called for every deal in every buyer search).
+  const byName = new Map(NICHES.map(n => [n.niche, Object.freeze({ niche: n.niche, industry: n.industry, score: 2, hits: [] })]));
+  const head = (s, n) => { const t = String(s || ''); return t.length > n ? t.slice(0, n) : t; };
   function ofDeal(a) {
     if (!a || typeof a !== 'object') return null;
-    if (dealCache.has(a)) return dealCache.get(a);
-    const v = score([[[a.industry, Array.isArray(a.tags) ? a.tags.join(' ; ') : a.tags].join(' ; '), 2], [[a.description, a.why, a.target].join(' '), 1]]).find(x => x.score >= 2) || null;
-    dealCache.set(a, v);
+    if (a.nv === VERSION && typeof a.niche === 'string') return byName.get(a.niche) || null;
+    const v = score([[[a.industry, Array.isArray(a.tags) ? a.tags.join(' ; ') : a.tags].join(' ; '), 2], [[head(a.description, 400), head(a.why, 300), a.target].join(' '), 1]]).find(x => x.score >= 2) || null;
+    a.niche = v ? v.niche : ''; a.nv = VERSION;
     return v;
   }
   // Synonyms of a niche, for phrase matching ("process intelligence" should hit "process mining").
@@ -139,5 +144,5 @@ const Taxonomy = (() => {
     ['GRC & compliance', 'Security software', 'Identity & access management', 'Tax & compliance reporting'],
   ];
   const adjacent = (a, b) => a !== b && ADJ.some(g => g[0] === a ? g.includes(b) : g[0] === b ? g.includes(a) : false);
-  return { INDUSTRIES, NICHES: list(), classify, ofDeal, score, synonyms, isGeneric, adjacent, industryOf: niche => byNiche.get(String(niche).toLowerCase())?.industry || '' };
+  return { VERSION, INDUSTRIES, NICHES: list(), classify, ofDeal, score, synonyms, isGeneric, adjacent, industryOf: niche => byNiche.get(String(niche).toLowerCase())?.industry || '' };
 })();

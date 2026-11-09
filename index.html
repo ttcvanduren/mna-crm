@@ -17,35 +17,53 @@
   <script src="config.js"></script>
 </head>
 <body>
-  <div class="app">
+  <div class="app" id="app">
     <aside class="sidebar">
-      <div class="brand"><span class="logo-mark">M&amp;A</span> CRM</div>
-      <nav>
+      <div class="brand">
+        <div class="brand-mark">33</div>
+        <div class="brand-text"><b>33 Equity</b><span>M&amp;A platform</span></div>
+      </div>
+      <nav class="nav">
         <div class="nav-group">Deals</div>
-        <button class="tab active" data-tab="dashboard"><span class="ico">◉</span>Dashboard</button>
-        <button class="tab" data-tab="projects"><span class="ico">◆</span>Projects</button>
+        <button class="tab active" data-tab="dashboard" data-icon="home"><span class="ico"></span><span class="lbl">Dashboard</span></button>
+        <button class="tab" data-tab="projects" data-icon="briefcase"><span class="ico"></span><span class="lbl">Projects</span><span class="nav-count" id="navProjectCount"></span></button>
         <div id="navProjects" class="nav-projects"></div>
-        <button class="tab" data-tab="pitches"><span class="ico">✎</span>Pitches</button>
+        <button class="tab" data-tab="pitches" data-icon="presentation"><span class="ico"></span><span class="lbl">Pitches</span></button>
         <div class="nav-group">Database</div>
-        <button class="tab" data-tab="companies"><span class="ico">▦</span>Companies</button>
-        <button class="tab" data-tab="transactions"><span class="ico">⇄</span>Transactions</button>
+        <button class="tab" data-tab="companies" data-icon="building"><span class="ico"></span><span class="lbl">Companies</span></button>
+        <button class="tab" data-tab="transactions" data-icon="arrows"><span class="ico"></span><span class="lbl">Transactions</span></button>
         <div class="nav-group">Analysis</div>
-        <button class="tab" data-tab="match"><span class="ico">◎</span>Buyer search</button>
-        <button class="tab" data-tab="valuation"><span class="ico">€</span>Value a company</button>
-        <button class="tab" data-tab="market"><span class="ico">▤</span>Market heat map</button>
+        <button class="tab" data-tab="match" data-icon="target"><span class="ico"></span><span class="lbl">Buyer search</span></button>
+        <button class="tab" data-tab="valuation" data-icon="scale"><span class="ico"></span><span class="lbl">Value a company</span></button>
+        <button class="tab" data-tab="market" data-icon="flame"><span class="ico"></span><span class="lbl">Market heat map</span></button>
         <div class="nav-group">Outreach</div>
-        <button class="tab" data-tab="email"><span class="ico">✉</span>Email</button>
-        <button class="tab" data-tab="activity"><span class="ico">≡</span>Activity</button>
+        <button class="tab" data-tab="email" data-icon="mail"><span class="ico"></span><span class="lbl">Email</span></button>
+        <button class="tab" data-tab="activity" data-icon="activity"><span class="ico"></span><span class="lbl">Activity</span></button>
         <div class="nav-group">Admin</div>
-        <button class="tab" data-tab="data"><span class="ico">⇪</span>Data &amp; sources</button>
-        <button class="tab" data-tab="settings"><span class="ico">⚙</span>Settings</button>
+        <button class="tab" data-tab="data" data-icon="database"><span class="ico"></span><span class="lbl">Data &amp; sources</span></button>
+        <button class="tab" data-tab="settings" data-icon="settings"><span class="ico"></span><span class="lbl">Settings</span></button>
       </nav>
       <div class="sidebar-foot">
-        <div id="syncStatus" class="small"></div>
-        <div id="account" class="small"></div>
+        <div id="syncStatus" class="sync"></div>
+        <div id="account" class="small account"></div>
+        <button class="collapse-btn" id="collapseNav" title="Collapse menu"><span class="ico" data-icon="chevrons"></span><span class="lbl">Collapse</span></button>
       </div>
     </aside>
 
+    <div class="shell">
+    <header class="topbar">
+      <div class="crumbs"><span id="crumbGroup"></span><span class="crumb-sep">/</span><b id="crumbPage">Dashboard</b></div>
+      <div class="gsearch">
+        <span class="ico" data-icon="search"></span>
+        <input id="globalSearch" type="search" placeholder="Search companies, projects, pitches…" autocomplete="off">
+        <kbd>Ctrl K</kbd>
+        <div id="gsResults" class="gs-results" hidden></div>
+      </div>
+      <div class="top-right">
+        <span id="topSync" class="top-sync"></span>
+        <div class="avatar" id="avatar" title=""></div>
+      </div>
+    </header>
     <main>
       <!-- PROJECTS -->
       <section id="tab-dashboard" class="panel active"><div id="dashboardView"></div></section>
@@ -310,6 +328,7 @@
         </div>
       </section>
     </main>
+    </div>
   </div>
 
   <!-- Company profile -->
@@ -369,6 +388,7 @@
   <script src="compset.js"></script>
   <script src="pitch.js"></script>
   <script src="datahub.js"></script>
+  <script src="shell.js"></script>
   <script src="market.js"></script>
 </body>
 </html>

@@ -168,8 +168,8 @@ const Engine = (() => {
   // Removed when comparing names for duplicates: "x-tention Unternehmensgruppe" = "X-Tention GmbH".
   const LEGAL_WORDS = new Set('bv b.v nv n.v gmbh ag sa sas sarl srl spa ltd limited plc inc incorporated llc lp llp co kg ohg se ab as oy aps bvba vof cv holding holdings group groep gruppe unternehmensgruppe the de and'.split(' '));
 
-  const DEFAULT_WEIGHTS = { sector: 30, keywords: 25, appetite: 15, geography: 10, size: 10, history: 5, role: 5 };
-  const WEIGHT_LABELS = { sector: 'Sector', keywords: 'Keywords', appetite: 'M&A appetite', geography: 'Geography', size: 'Size fit', history: 'History with us', role: 'Buyer/target role' };
+  const DEFAULT_WEIGHTS = { sector: 30, acquisitions: 25, keywords: 25, appetite: 15, geography: 10, size: 10, history: 5, role: 5 };
+  const WEIGHT_LABELS = { sector: 'Sector / niche', acquisitions: 'Relevant acquisitions', keywords: 'Keywords', appetite: 'M&A appetite', geography: 'Geography', size: 'Size fit', history: 'History with us', role: 'Buyer/target role' };
 
   const norm = s => String(s ?? '').replace(/\s+/g, ' ').trim();
   const lower = s => norm(s).toLowerCase();
@@ -647,8 +647,23 @@ const Engine = (() => {
   const hasEmail = c => !!primaryContact(c);
 
   const textOf = c => [c.short_description, c.summary, c.description, c.keywords, (c.tags || []).join(' '), c.subsector, c.sector, c.portfolio].join(' ').toLowerCase();
+  // Word sets and plain text per company are cached until its texts change (a buyer search compares every company).
+  const tokenCache = new WeakMap(), plainCache = new WeakMap();
+  const textSig = c => [c.short_description, c.summary, c.description, c.keywords, c.subsector, c.sector, c.portfolio].map(s => String(s || '').length).join() + ':' + (c.tags || []).length;
+  function plainText(c) {
+    const sig = textSig(c), hit = plainCache.get(c);
+    if (hit && hit.sig === sig) return hit.v;
+    const v = ' ' + textOf(c).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+    plainCache.set(c, { sig, v });
+    return v;
+  }
   function tokens(c) {
-    return new Set(textOf(c).split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t) && !GENERIC.has(t)));
+    const sig = textSig(c);
+    const hit = tokenCache.get(c);
+    if (hit && hit.sig === sig) return hit.v;
+    const v = new Set(textOf(c).split(/[^a-z0-9à-ÿ]+/).filter(t => t.length > 2 && !STOPWORDS.has(t) && !GENERIC.has(t)));
+    tokenCache.set(c, { sig, v });
+    return v;
   }
 
   const sameish = (a, b) => a && b && (a === b || a.includes(b) || b.includes(a));
@@ -659,6 +674,8 @@ const Engine = (() => {
   const nicheCache = new WeakMap();
   function nichesOf(c) {
     if (typeof Taxonomy === 'undefined') return [];
+    // CRM companies carry their top niches (kept current by classifyNiche in app.js); deal profiles are classified here.
+    if (Array.isArray(c.niches) && c.niche_sig) return c.niches;
     const sig = [c.niche, c.niche_auto, c.subsector, c.sector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|');
     const hit = nicheCache.get(c);
     if (hit && hit.sig === sig) return hit.v;
@@ -715,10 +732,13 @@ const Engine = (() => {
     return [...new Set([...own, ...(top ? Taxonomy.synonyms(top.niche) : [])])];
   }
   function phraseScore(deal, cand) {
-    const phrases = dealPhrases(deal);
+    const phrases = plainPhrases(deal);
     if (!phrases.length) return [0, []];
-    const text = ' ' + textOf(cand).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
-    const hits = phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
+    const words = tokens(cand);
+    const cands = phrases.filter(x => mayContain(words, x));
+    if (!cands.length) return [0, []];
+    const text = plainText(cand);
+    const hits = cands.filter(x => text.includes(x.plain)).map(x => x.p);
     return [Math.min(1, hits.length / Math.min(3, phrases.length)), hits];
   }
 
@@ -791,11 +811,38 @@ const Engine = (() => {
     return p;
   }
 
+  // What a buyer acquired, as plain text: cached per buyer until its deals or focus change.
+  const acqTextCache = new WeakMap();
+  function acqText(cand) {
+    const sig = `${(cand.acquisitions || []).length}:${String(cand.acquisition_focus || '').length}:${String(cand.target_sectors || '').length}`;
+    const hit = acqTextCache.get(cand);
+    if (hit && hit.sig === sig) return hit.v;
+    const v = ' ' + lower([cand.acquisition_focus, cand.target_sectors, ...(cand.acquisitions || []).map(a => [a.industry, a.tags, a.description].join(' '))].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
+    acqTextCache.set(cand, { sig, v });
+    return v;
+  }
+  // Deal phrases in the same plain form, computed once per deal. `need` = the phrase's significant words: a company whose
+  // word set lacks one of them can't contain the phrase, which skips the (slow) text search for almost every company.
+  const phraseCache = new WeakMap();
+  const significant = w => w.length > 2 && !STOPWORDS.has(w) && !GENERIC.has(w);
+  function plainPhrases(deal) {
+    if (!phraseCache.has(deal)) phraseCache.set(deal, dealPhrases(deal).map(p => { const plain = ' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '; return { p, plain, need: plain.trim().split(' ').filter(significant) }; }));
+    return phraseCache.get(deal);
+  }
+  const mayContain = (words, x) => x.need.every(w => words.has(w));
+  // Word set of what a buyer acquired, cached like acqText.
+  const acqWordsCache = new WeakMap();
+  function acqWords(cand) {
+    const text = acqText(cand), hit = acqWordsCache.get(cand);
+    if (hit && hit.text === text) return hit.v;
+    const v = new Set(text.split(' ').filter(significant));
+    acqWordsCache.set(cand, { text, v });
+    return v;
+  }
   function acquiredPhrases(deal, cand) {
     if (!cand.acquisitions?.length && !cand.acquisition_focus) return [];
-    const phrases = dealPhrases(deal);
-    const text = ' ' + lower([cand.acquisition_focus, cand.target_sectors, ...(cand.acquisitions || []).map(a => [a.industry, a.tags, a.description].join(' '))].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' ';
-    return phrases.filter(p => text.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' '));
+    const words = acqWords(cand), text = acqText(cand);
+    return plainPhrases(deal).filter(x => mayContain(words, x) && text.includes(x.plain)).map(x => x.p);
   }
 
   function keywordScore(dealTokens, cand, deal) {
@@ -822,8 +869,17 @@ const Engine = (() => {
 
   // Sentences from your own lists that talk about acquisitions ("Serial acquirer: Integic, soffico, ICW…").
   const ACQ_WORDS = /acqui|acquir|bought|purchas|übernahm|übernimmt|übernahme|zukauf|overname|overgenomen|serial|buy[- ]and[- ]build|add-on|took over|takeover|merger|merged with|portfolio|platform investment|majority stake|stake in/i;
+  const notesCache = new WeakMap();
   function listAcquisitionNotes(c) {
-    const sources = [['Description', c.description], ['Summary', c.summary], ['Notes', c.notes], ['Portfolio', c.portfolio], ...((c.alt?.description) || []).map(d => ['Other description', d])];
+    const sig = [c.description, c.summary, c.notes, c.portfolio].map(s => String(s || '').length).join() + '|' + (c.projects || []).map(p => `${String(p.remarks || '').length}.${String(p.log || '').length}.${Object.keys(p.extra || {}).length}`).join();
+    const hit = notesCache.get(c);
+    if (hit && hit.sig === sig) return hit.v;
+    const v = listAcquisitionNotesUncached(c);
+    notesCache.set(c, { sig, v });
+    return v;
+  }
+  function listAcquisitionNotesUncached(c) {
+    const sources =[['Description', c.description], ['Summary', c.summary], ['Notes', c.notes], ['Portfolio', c.portfolio], ...((c.alt?.description) || []).map(d => ['Other description', d])];
     for (const p of c.projects || []) {
       sources.push([`${p.project} remarks`, p.remarks], [`${p.project} log`, p.log], [`${p.project} rationale`, p.rationale]);
       for (const [k, v] of Object.entries(p.extra || {})) sources.push([`${p.project} – ${k}`, v]);
@@ -842,21 +898,61 @@ const Engine = (() => {
     return out;
   }
 
+  // Per deal profile: the phrases (plain form) and top niches used to spot "bought in this space"; computed once per search.
+  const appetiteCache = new WeakMap();
+  function appetiteOf(deal) {
+    if (!appetiteCache.has(deal)) {
+      const phrases = [...new Set([...dealPhrases(deal), ...segments(deal.sector || '').filter(s => !isGenericSector(s))].filter(p => p.length > 2 && !GENERIC.has(p)))];
+      // Same rule as the sector score: a second niche only counts when it's nearly as strong as the main one.
+      const dn = nichesOf(deal), topNiches = dn.filter((x, i) => i === 0 || (i === 1 && x.score >= dn[0].score * 0.6)).map(x => x.niche);
+      const plain = phrases.map(p => ' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ');
+      // One pattern for all phrases: one test per deal instead of one search per phrase.
+      const re = plain.length ? new RegExp(plain.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')) : null;
+      appetiteCache.set(deal, { phrases: plain, re, topNiches });
+    }
+    return appetiteCache.get(deal);
+  }
+  // One acquisition as plain text, cached on the deal object.
+  const dealTextCache = new WeakMap();
+  function dealText(a) {
+    let t = dealTextCache.get(a);
+    if (t === undefined) { t = ' ' + lower([a.industry, a.tags, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; dealTextCache.set(a, t); }
+    return t;
+  }
+  // How relevant the buyer's past deals are to this target: a deal in the target's niche (or one that matches the
+  // target's keywords) is the strongest buyer signal there is. Recent deals count more, and so do several of them.
+  const dealYear = a => +String(a.date || a.year || '').slice(0, 4) || null;
+  function acquisitionFitScore(deal, cand) {
+    const list = cand.acquisitions || [];
+    if (!list.length) return [0, null];
+    const ap = appetiteOf(deal), now = new Date().getFullYear();
+    // Score = best (relevance × recency); the deal shown is the most relevant kind first, then the newest of that kind.
+    let best = 0, shownRel = 0, shownYear = -1, bestDeal = null, bestNiche = '', relevant = 0;
+    for (const a of list) {
+      const n = Taxonomy.ofDeal(a)?.niche || '';
+      let rel = 0;
+      if (n && ap.topNiches.includes(n)) rel = 1;
+      else if (ap.re && ap.re.test(dealText(a))) rel = 0.8;
+      if (!rel && n && ap.topNiches.some(t => Taxonomy.adjacent(t, n))) rel = 0.5;
+      if (!rel) continue;
+      const y = dealYear(a);
+      const weighted = rel * (y == null ? 0.7 : y >= now - 3 ? 1 : y >= now - 6 ? 0.85 : 0.65);
+      if (weighted >= 0.4) relevant++;
+      best = Math.max(best, weighted);
+      if (rel > shownRel || (rel === shownRel && (y || 0) > shownYear)) { shownRel = rel; shownYear = y || 0; bestDeal = a; bestNiche = n; }
+    }
+    if (!bestDeal) return [0, null];
+    const score = Math.min(1, best + 0.08 * Math.max(0, relevant - 1));
+    const y = dealYear(bestDeal);
+    return [score, `Bought ${bestDeal.target}${y ? ` (${y})` : ''}${bestNiche ? ` – ${bestNiche}` : ''}${relevant > 1 ? ` · ${relevant - 1} more similar deal${relevant > 2 ? 's' : ''}` : ''}`];
+  }
+
   // Serial acquirers and PE-backed platforms (add-on buyers) are more likely to buy.
   function appetiteScore(cand, deal) {
     const acq = (cand.acquisitions || []).length;
     const tags = (cand.tags || []).join(' ');
     const said = cand.acquisitive || cand.enrichment?.is_acquisitive;
-    // Strongest signal: the buyer already bought something in the deal's space.
-    const phrases = deal ? [...new Set([...dealPhrases(deal), ...segments(deal.sector || '').filter(s => !isGenericSector(s))].filter(p => p.length > 2 && !GENERIC.has(p)))] : [];
-    // A deal classified in the deal's own niche is the clearest "bought in this space".
-    const topNiches = deal ? nichesOf(deal).slice(0, 2).map(x => x.niche) : [];
-    const nicheDeal = topNiches.length && (cand.acquisitions || []).find(a => topNiches.includes(Taxonomy.ofDeal(a)?.niche));
-    if (nicheDeal) return [1, `Bought ${nicheDeal.target}${nicheDeal.date || nicheDeal.year ? ` (${String(nicheDeal.date || nicheDeal.year).slice(0, 4)})` : ''} in ${Taxonomy.ofDeal(nicheDeal).niche}`];
-    if (phrases.length) {
-      const hit = (cand.acquisitions || []).find(a => { const t = ' ' + lower([a.industry, a.tags, a.description, a.target].join(' ')).replace(/[^a-z0-9à-ÿ]+/g, ' ') + ' '; return phrases.some(p => t.includes(' ' + p.replace(/[^a-z0-9à-ÿ]+/g, ' ').trim() + ' ')); });
-      if (hit) return [1, `Bought ${hit.target}${hit.date || hit.year ? ` (${String(hit.date || hit.year).slice(0, 4)})` : ''}${hit.industry ? ': ' + hit.industry : ''}`];
-    }
+    // "Bought something in this space" is scored separately (acquisitionFitScore); this is only about appetite.
     if (acq >= 3 || said === 'yes' || /serial acquirer|acquisitive|buy-and-build|consolidator/.test(tags)) return [1, acq ? `${acq} acquisitions` : 'Acquisitive'];
     const notes = listAcquisitionNotes(cand);
     if (notes.some(n => /serial|acquisitive|buy[- ]and[- ]build|several acqui|multiple acqui/i.test(n.text))) return [0.9, 'Acquisitive (per your lists)'];
@@ -880,6 +976,9 @@ const Engine = (() => {
     return [0.55, `Known from ${others[0].project}`];
   }
 
+  // Builds a company's cached search data ahead of time (called in idle time after loading), so the first buyer search is fast.
+  function warm(c) { tokens(c); plainText(c); acqWords(c); acquisitionProfile(c); listAcquisitionNotes(c); nichesOf(c); (c.acquisitions || []).forEach(dealText); }
+
   function match(deal, companies, weights = DEFAULT_WEIGHTS) {
     const dealTokens = tokens(deal);
     const totalW = Object.values(weights).reduce((a, b) => a + Number(b), 0) || 1;
@@ -890,6 +989,7 @@ const Engine = (() => {
         const candIsBuyerSide = BUY_SIDE.has(c.role) || (!c.role && candIsBuyerSideDefault);
         const parts = {
           sector: sectorScore(deal, c),
+          acquisitions: acquisitionFitScore(deal, c),
           geography: geographyScore(deal, c),
           size: sizeScore(deal, c, candIsBuyerSide),
           keywords: keywordScore(dealTokens, c, deal),
@@ -901,15 +1001,17 @@ const Engine = (() => {
         for (const [k, [v]] of Object.entries(parts)) sum += v * Number(weights[k] || 0);
         // Without any business fit, geography or appetite alone shouldn't make a good match.
         // A buyer that already acquired in the deal's space has a business fit, even without a description of its own.
-        if (parts.sector[0] === 0 && parts.keywords[0] < 0.2 && !/^Bought /.test(parts.appetite[1] || '')) sum *= 0.4;
-        return { company: c, score: Math.round((sum / totalW) * 100), reasons: Object.values(parts).map(p => p[1]).filter(Boolean) };
+        if (parts.sector[0] === 0 && parts.keywords[0] < 0.2 && parts.acquisitions[0] < 0.5) sum *= 0.4;
+        return { company: c, score: Math.round((sum / totalW) * 100), reasons: Object.values(parts).map(p => p[1]).filter(Boolean), acqFit: parts.acquisitions[0] };
       })
       .sort((a, b) => b.score - a.score);
   }
 
+  // Reused formatters: toLocaleString builds a new one on every call, which is slow in buyer searches.
+  const NF1 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 1 }), NF0 = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
   function fmt(n) {
     if (n == null || n === '') return '';
-    return Number(n).toLocaleString('en-US', { maximumFractionDigits: n < 100 ? 1 : 0 });
+    return (n < 100 ? NF1 : NF0).format(Number(n));
   }
 
   // Fills {{placeholders}} in a template for one contact at a candidate company.
@@ -928,7 +1030,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, nichesOf, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, nichesOf, warm, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;
