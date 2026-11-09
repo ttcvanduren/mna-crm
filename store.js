@@ -113,12 +113,31 @@ const Store = (() => {
   }
 
   // `changed` is what to write to the cloud; `all` is the full list for browser storage.
-  async function saveCompanies(changed, all) {
+  // Cloud: batches of at most 100 companies and ~1.5 MB, because large records (long deal lists, research texts) can hit
+  // Supabase's request-size or time limit. A failing batch is split in halves and retried; companies that still fail are
+  // reported in err.failed so only those are retried later. onProgress(done, total) reports progress for big uploads.
+  async function saveCompanies(changed, all, onProgress) {
     if (mode === 'local') return idb.write('companies', changed.map(strip));
     const now = new Date().toISOString();
-    for (const part of chunks(changed, 300)) {
-      check(await sb.from('companies').upsert(part.map(c => ({ id: c.id, data: strip(c), updated_at: now, updated_by: user?.email || null }))));
+    const rows = changed.map(c => ({ id: c.id, data: strip(c), updated_at: now, updated_by: user?.email || null }));
+    const batches = [];
+    let cur = [], size = 0;
+    for (const r of rows) {
+      const n = JSON.stringify(r.data).length;
+      if (cur.length && (cur.length >= 100 || size + n > 1_500_000)) { batches.push(cur); cur = []; size = 0; }
+      cur.push(r); size += n;
     }
+    if (cur.length) batches.push(cur);
+    let done = 0, lastError = '';
+    const failed = [];
+    const send = async b => {
+      const { error } = await sb.from('companies').upsert(b);
+      if (!error) { done += b.length; onProgress?.(done, rows.length); return; }
+      if (b.length > 1) { const h = Math.ceil(b.length / 2); await send(b.slice(0, h)); await send(b.slice(h)); return; }
+      failed.push(b[0].id); lastError = error.message;
+    };
+    for (const b of batches) await send(b);
+    if (failed.length) { const err = new Error(`${failed.length} of ${rows.length} companies could not be saved (${lastError})`); err.failed = failed; throw err; }
   }
 
   async function deleteCompanies(ids, all) {

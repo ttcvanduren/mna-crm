@@ -58,7 +58,8 @@ function onTabShown(name) {
 // Status in the top bar mirrors the sidebar's save status; the avatar shows the signed-in user.
 function renderTopStatus() {
   const saving = /saving/i.test($('#syncStatus').textContent), failed = /fail/i.test($('#syncStatus').textContent);
-  $('#topSync').innerHTML = `<span class="dot ${failed ? 'bad' : saving ? 'busy' : ''}"></span>${failed ? 'Save failed' : saving ? 'Saving…' : 'All changes saved'}`;
+  const progress = ($('#syncStatus').textContent.match(/Saving… ([\d.,]+ \/ [\d.,]+)/) || [])[1];
+  $('#topSync').innerHTML = `<span class="dot ${failed ? 'bad' : saving ? 'busy' : ''}"></span>${failed ? 'Save failed' : saving ? `Saving…${progress ? ' ' + progress : ''}` : 'All changes saved'}`;
   const who = Store.user?.email || '';
   $('#avatar').textContent = who ? who.split('@')[0].split(/[._-]/).map(s => s[0]).join('').slice(0, 2).toUpperCase() : '33';
   $('#avatar').title = who || (Store.mode === 'cloud' ? 'Team database' : 'Data in this browser');

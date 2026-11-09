@@ -149,10 +149,10 @@ async function flush() {
   dirty.clear();
   setSync('Saving…');
   try {
-    await Store.saveCompanies(ids.map(byId).filter(Boolean), state.companies);
+    await Store.saveCompanies(ids.map(byId).filter(Boolean), state.companies, (done, total) => { if (total > 300) setSync(`Saving… ${done.toLocaleString()} / ${total.toLocaleString()}`); });
     setSync('All changes saved');
   } catch (err) {
-    ids.forEach(id => dirty.add(id));
+    (err.failed || ids).forEach(id => dirty.add(id)); // only retry what didn't arrive
     setSync('Save failed – retrying', true);
     toast('Could not save: ' + err.message, 6000);
     flushTimer = setTimeout(flush, 8000);
