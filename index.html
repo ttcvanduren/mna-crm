@@ -281,6 +281,13 @@
             </div>
           </div>
           <div class="card">
+            <h2>Public website index</h2>
+            <p class="muted small">Builds the anonymous market index behind the public valuation &amp; buyer site: statistics per niche and buyer profiles <b>without names, people or deal rows</b>. Keep the file private: upload it to the website server's private storage, never to GitHub.</p>
+            <label class="check small"><input type="checkbox" id="piIncludeTx" checked> Include transaction multiples (check your S&amp;P / Mergermarket licence first)</label>
+            <div class="toolbar"><button class="btn primary" id="publishIndex">Build market index</button></div>
+            <div id="piInfo" class="muted small"></div>
+          </div>
+          <div class="card">
             <h2>Delete</h2>
             <p class="muted small">Download a backup first. In the team database this deletes for everyone.</p>
             <div class="toolbar"><button class="btn danger" id="wipe">Delete all companies</button><button class="btn danger" data-vx="cleartx">Delete all transactions</button></div>
@@ -392,6 +399,7 @@
   <script src="compset.js"></script>
   <script src="pitch.js"></script>
   <script src="datahub.js"></script>
+  <script src="publicindex.js"></script>
   <script src="shell.js"></script>
   <script src="market.js"></script>
 </body>
