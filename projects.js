@@ -172,6 +172,7 @@ function companyCell(c) {
     <div class="co-line"><span class="co-name">${esc(c.name)}</span>
       ${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener" title="Open ${esc(c._domain || site)}">↗ ${esc(c._domain || 'website')}</a>` : ''}
       ${c.linkedin_url ? `<a class="ext li" href="${esc(c.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
+      ${badges(c)}
     </div>
     <div class="co-sub" title="${esc(sub)}">${esc(sub)}</div></div></div>`;
 }

@@ -421,6 +421,23 @@ const vpct = x => (x == null ? '–' : `${x >= 0 ? '+' : ''}${Math.round(x * 100
 const mult = x => (x == null ? '–' : `${x.toFixed(1)}x`);
 function gradeChip(g, k) { return `<span class="grade g${g}" ${k ? `data-gk="${k}"` : ''}>${g}</span>`; }
 
+// Distribution of a multiple across the comparable deals: one bar per deal (highest first) with the median as a line.
+function multBars(values, label) {
+  const xs = values.filter(x => x != null && isFinite(x) && x > 0).sort((a, b) => b - a);
+  if (xs.length < 3) return '';
+  const cap = percentile(xs, 0.95) * 1.1 || xs[0], md = med(xs);
+  const W = 560, H = 150, pad = 26, bw = (W - pad) / xs.length;
+  const y = v => H - 18 - (Math.min(v, cap) / cap) * (H - 30);
+  return `<div class="mr-chart"><div class="small"><b>${label}</b> <span class="muted">${xs.length} deals · P25 ${mult(percentile(xs, 0.25))} · P75 ${mult(percentile(xs, 0.75))}</span></div>
+    <svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="${label} multiples of comparable deals, median ${mult(md)}">
+      <line x1="${pad}" x2="${W}" y1="${H - 18}" y2="${H - 18}" stroke="var(--line-strong)"/>
+      ${[0, 0.5, 1].map(f => `<text x="0" y="${y(cap * f) + 4}" font-size="10" fill="var(--muted)">${(cap * f).toFixed(1)}</text>`).join('')}
+      ${xs.map((v, i) => `<rect x="${pad + i * bw + bw * 0.15}" y="${y(v)}" width="${Math.max(1, bw * 0.7)}" height="${H - 18 - y(v)}" rx="1.5" fill="var(--track)" stroke="#cfc6b4" stroke-width=".6"><title>${mult(v)}</title></rect>`).join('')}
+      <line x1="${pad}" x2="${W}" y1="${y(md)}" y2="${y(md)}" stroke="var(--accent)" stroke-width="1.5"/>
+      <rect x="${W - 92}" y="${y(md) - 20}" width="90" height="17" rx="4" fill="var(--accent)"/><text x="${W - 47}" y="${y(md) - 8}" font-size="10.5" fill="#fff" text-anchor="middle" font-weight="600">Median ${mult(md)}</text>
+    </svg></div>`;
+}
+
 function renderValuationTab(proj, el) {
   if (!state.transactions.length) {
     el.innerHTML = `<div class="empty">No transactions yet. Import your Capital IQ transaction export first (it can be several files).<br><br>
@@ -447,6 +464,17 @@ function renderValuationTab(proj, el) {
       </tbody></table>
       <div class="toolbar" style="margin-top:10px"><label class="row-label small">Net debt (EUR m) ${input('net_debt', '0')}</label></div>
     </div>
+
+    ${r.comps.used.length >= 3 ? `<div class="card span2" style="order:3">
+      <div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">Market report</h2><span class="muted small">We evaluated <b>${r.comps.used.length}</b> similar past deals</span></div>
+      <div class="mr-grid">
+        <div>${multBars(r.comps.used.map(x => x.t.ev_revenue), 'EV / Revenue')}${multBars(r.comps.used.map(x => x.t.ev_ebitda), 'EV / EBITDA')}</div>
+        <div class="mr-list"><div class="mr-head"><b>Similar transactions</b> <span class="count">${r.comps.used.length}</span></div>
+          <table class="compact"><thead><tr><th>Year</th><th>Target</th><th class="num">Value</th><th class="num">Multiple</th></tr></thead><tbody>
+          ${r.comps.used.slice(0, 9).map(x => `<tr title="${esc(x.t.summary || x.t.description || '')}"><td class="small">${esc(String(x.t.year || x.t.date || '').slice(0, 4))}</td><td><b>${esc(x.t.target)}</b><div class="muted small">${esc(String(x.t.buyer || '').slice(0, 40))}</div></td><td class="num small">${x.t.deal_value != null ? '$' + Engine.fmt(x.t.deal_value) + 'm' : '–'}</td><td class="num small">${x.t.ev_ebitda != null ? mult(x.t.ev_ebitda) + ' <span class="muted">EBITDA</span>' : mult(x.t.ev_revenue) + ' <span class="muted">rev</span>'}</td></tr>`).join('')}
+          </tbody></table></div>
+      </div>
+    </div>` : ''}
 
     <div class="card span2" style="order:3">
       <h2>Comparable transactions</h2>

@@ -106,11 +106,14 @@
             <option value="yes">Researched by Claude</option>
             <option value="no">Not researched yet</option>
           </select>
-          <label class="check"><input type="checkbox" id="filterEmail"> Has email</label>
-          <label class="check"><input type="checkbox" id="filterMulti"> In 2+ projects</label>
-          <label class="check"><input type="checkbox" id="filterAcq"> Acquisitive (3+ deals)</label>
-          <button class="btn ghost sm" id="clearFilters">Clear filters</button>
+          <span hidden><input type="checkbox" id="filterEmail"><input type="checkbox" id="filterMulti"><input type="checkbox" id="filterAcq"><input type="checkbox" id="filterWatch"></span>
         </div>
+        <div class="quick-row">
+          <div id="quickFilters" class="pills"></div>
+          <span class="spacer"></span>
+          <div id="savedSearches" class="saved"></div>
+        </div>
+        <div id="activeFilters" class="active-filters"></div>
 
         <div id="dupBanner" class="dup-banner" hidden></div>
         <div id="bulkBar" class="bulk-bar" hidden>
@@ -174,9 +177,10 @@
               <button class="btn" id="exportMatches">Export</button>
               <button class="btn primary" id="emailSelected">Email selected →</button>
             </div>
+            <div id="matchKinds"></div>
             <div class="table-wrap">
-              <table id="matchTable" class="data">
-                <thead><tr><th class="cb"><input type="checkbox" id="checkAll"></th><th>Score</th><th>Company</th><th>Role</th><th>Sector</th><th>Country</th><th class="num">Revenue</th><th>Email</th><th>Why</th></tr></thead>
+              <table id="matchTable" class="data buyer-list">
+                <thead><tr><th class="cb"><input type="checkbox" id="checkAll"></th><th>Score</th><th>Buyer</th><th>About</th><th>Relevant acquisitions</th><th>Why it fits</th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

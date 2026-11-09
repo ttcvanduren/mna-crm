@@ -144,8 +144,22 @@ function renderDashboard() {
   const tile = (k, v, sub) => `<div class="kpi"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div class="muted small">${sub}</div>` : ''}</div>`;
   const step = (label, n, base, bench) => `<div class="fstep"><div class="fbar" style="width:${Math.max(4, pct(n, f.contacted || 1))}%"></div><span><b>${n}</b> ${label}</span><span class="muted small">${base != null ? pct(n, base) + '% of previous' : ''}${bench ? ` · typical ${bench}` : ''}</span></div>`;
 
-  $('#dashboardView').innerHTML = `<div class="page-head"><div><h1>Dashboard</h1><div class="muted">${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${active.length} active mandates</div></div>
+  // Activity feed: emails sent plus log lines of active mandates, newest first.
+  const feed = [
+    ...state.activity.filter(a => a.ok !== false).slice(0, 60).map(a => ({ date: a.date, c: byId(a.companyId) || { name: a.companyName }, text: `${a.subject ? 'Email: ' + a.subject : 'Email sent'}${a.contactName ? ' → ' + a.contactName : ''}`, project: a.dealName })),
+    ...pairs.flatMap(({ c, p }) => String(p.log || '').split('\n').slice(0, 3).map(l => l.match(/^(\d{4}-\d{2}-\d{2})\s*[–-]\s*(.+)$/)).filter(Boolean).map(m => ({ date: m[1], c, text: m[2], project: p.project }))),
+  ].filter(x => x.date).sort((a, b) => String(b.date).localeCompare(String(a.date))).slice(0, 12);
+  const watched = state.companies.filter(c => c.watched).map(c => ({ c, n: watchNews(c) })).sort((a, b) => b.n.total - a.n.total || a.c.name.localeCompare(b.c.name));
+  const hour = new Date().getHours();
+  const who = (Store.user?.email || '').split('@')[0].split(/[._-]/)[0];
+  const greet = `${hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}${who ? ', ' + who[0].toUpperCase() + who.slice(1) : ''}`;
+
+  $('#dashboardView').innerHTML = `<div class="page-head"><div><h1>${esc(greet)}</h1><div class="muted">${new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} · ${active.length} active mandates · ${state.companies.length.toLocaleString()} companies</div></div>
       <div class="actions"><button class="btn" data-go="projects">All projects</button></div></div>
+    <div class="hero">
+      <div><div class="hero-title">Start from a website</div><div class="muted small">Paste a prospect's website: we open it if it's already in the CRM, otherwise a new pitch with comparable deals and a buyer longlist.</div></div>
+      <form class="hero-form" id="heroForm"><input id="heroSite" placeholder="e.g. process-science.com" autocomplete="off"><button class="btn primary">Find buyers →</button></form>
+    </div>
     ${state.dupBannerDash ? `<div class="dup-banner"><span>⧉ <b>${state.dupBannerDash} duplicate records</b> found in your companies.</span><span class="spacer"></span><button class="btn primary" data-go="companies">Go to Companies to merge</button></div>` : ''}
     <div class="kpis">
       ${tile('Active mandates', active.length)}
@@ -156,6 +170,21 @@ function renderDashboard() {
       ${tile('Actions open', actions.length, actions.filter(a => a.urgency <= 2).length + ' urgent')}
     </div>
 
+    <div class="mandate-cards">${active.map(p => {
+        const s = stats(p.name), ph = currentPhase(p), t = timelineOf(p), ff = funnelCounts(members(p.name));
+        const total = (new Date(t[t.length - 1].end) - new Date(t[0].start)) / 86400000, done = (Date.now() - new Date(t[0].start)) / 86400000;
+        const best = members(p.name).filter(m => m.p.offer?.amount).sort((a, b) => b.p.offer.amount - a.p.offer.amount)[0];
+        const quiet = s.last && (Date.now() - new Date(s.last).getTime()) / 86400000 > 14;
+        const phi = t.indexOf(ph);
+        return `<button class="mcard" data-goproj="${esc(p.name)}" data-gotab="overview">
+          <div class="m-head"><span class="mc-name">${esc(p.name)}</span><span class="spacer"></span>${quiet ? '<span class="chip amber">quiet >14d</span>' : ''}${ph && !phaseDone(p, phi) && ph.end < today() ? '<span class="chip red">overdue</span>' : ''}</div>
+          <div class="muted small">${esc(p.client || '')}${p.client ? ' · ' : ''}${esc(ph?.name || '')} · week ${Math.max(1, Math.ceil(done / 7))} of ${Math.ceil(total / 7)}</div>
+          <div class="phases">${t.map((x, i) => `<i class="${phaseDone(p, i) || i < phi ? 'done' : i === phi ? 'now' : ''}" title="${esc(x.name)}"></i>`).join('')}</div>
+          <div class="mc-nums"><div><b>${s.total}</b><span>buyers</span></div><div><b>${ff.contacted}</b><span>contacted</span></div><div><b>${ff.nda}</b><span>NDAs</span></div><div><b>${ff.ioi}</b><span>IOIs</span></div></div>
+          <div class="small">${best ? `Best offer <b class="ok">${eur(best.p.offer.amount)}</b> · ${esc(best.c.name)}` : `<span class="muted">${s.groups.Engaged} engaged · ${s.groups.Passed} passed</span>`}</div>
+        </button>`;
+      }).join('') || '<div class="empty">No active mandates. Set a project to Active to follow it here.</div>'}</div>
+
     <div class="dash-grid">
       <div class="card">
         <h2>Next best actions</h2>
@@ -163,19 +192,16 @@ function renderDashboard() {
           <span class="dot"></span><span class="txt">${esc(a.text)}</span><span class="chip">${esc(a.project)}</span></button>`).join('')}</div>` : '<div class="empty">Nothing urgent. 🎉</div>'}
       </div>
       <div class="card">
-        <h2>Mandates</h2>
-        ${active.map(p => {
-          const s = stats(p.name), ph = currentPhase(p), t = timelineOf(p);
-          const total = (new Date(t[t.length - 1].end) - new Date(t[0].start)) / 86400000, done = (Date.now() - new Date(t[0].start)) / 86400000;
-          const best = members(p.name).filter(m => m.p.offer?.amount).sort((a, b) => b.p.offer.amount - a.p.offer.amount)[0];
-          const quiet = s.last && (Date.now() - new Date(s.last).getTime()) / 86400000 > 14;
-          return `<div class="mandate" data-goproj="${esc(p.name)}" data-gotab="overview">
-            <div class="m-head"><b>${esc(p.name)}</b> <span class="muted small">${esc(p.client || '')}</span><span class="spacer"></span>${quiet ? '<span class="chip amber">quiet >14d</span>' : ''}${ph && !phaseDone(p, t.indexOf(ph)) && ph.end < today() ? '<span class="chip red">phase overdue</span>' : ''}</div>
-            <div class="small">${esc(ph?.name || '')} · week ${Math.max(1, Math.ceil(done / 7))} of ${Math.ceil(total / 7)}</div>
-            <div class="bar"><div style="width:${Math.max(0, Math.min(100, (done / total) * 100))}%;background:var(--accent)"></div></div>
-            <div class="small muted">${s.total} buyers · ${s.groups.Engaged} engaged · ${s.groups.Passed} passed${best ? ` · best offer <b class="ok">${eur(best.p.offer.amount)}</b>` : ''}</div>
-          </div>`;
-        }).join('') || '<div class="empty">No active mandates.</div>'}
+        <h2>Recent activity</h2>
+        ${feed.length ? `<div class="feed">${feed.map(x => `<div class="feed-item">${x.c.id ? logo(x.c) : `<span class="co-logo ini" style="--h:${hueOf(x.c.name)}">${esc(initials(x.c.name || '?'))}</span>`}
+          <div style="min-width:0"><div class="small"><b>${esc(x.c.name || '')}</b> ${esc(String(x.text).slice(0, 90))}</div><div class="muted small">${esc(ago(x.date))}${x.project ? ` · ${esc(x.project)}` : ''}</div></div></div>`).join('')}</div>` : '<div class="empty">No activity yet. Emails you send and stage changes on the pipeline board show up here.</div>'}
+      </div>
+      <div class="card">
+        <h2>Watchlist <span class="muted">(${watched.length})</span></h2>
+        ${watched.length ? `<div class="feed">${watched.slice(0, 10).map(({ c, n }) => `<button class="feed-item watch-item" data-openco="${c.id}">${logo(c)}
+          <div style="min-width:0;text-align:left"><div class="small"><b>${esc(c.name)}</b> ${n.total ? `<span class="chip green">${[n.deals && `${n.deals} new deal${n.deals > 1 ? 's' : ''}`, n.people && `${n.people} new ${n.people > 1 ? 'people' : 'person'}`].filter(Boolean).join(' · ')}</span>` : ''}</div>
+          <div class="muted small">${(c.acquisitions || []).length ? `Last deal: ${esc(c.acquisitions[0].target)} ${esc(String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 7))}` : esc(c.niche || c.sector || '')}</div></div></button>`).join('')}</div>`
+          : '<div class="empty">Click <b>☆ Watch</b> on a company page to follow its deals and people here.</div>'}
       </div>
       <div class="card">
         <h2>Conversion (active mandates)</h2>
@@ -209,8 +235,26 @@ function renderDashboard() {
       </div>
     </div>`;
 }
+$('#dashboardView').addEventListener('submit', e => {
+  if (e.target.id !== 'heroForm') return;
+  e.preventDefault();
+  const raw = $('#heroSite').value.trim();
+  if (!raw) return;
+  const d = Engine.domainOf(raw);
+  const hit = d && state.companies.find(c => (c._domain || Engine.domainOf(c.website)) === d);
+  if (hit) return openDrawer(hit.id);
+  // New prospect: a pitch with the website filled in; "Read website" on its first tab fills the description.
+  const name = (d || raw).split('.')[0].replace(/[-_]+/g, ' ').replace(/\b\w/g, ch => ch.toUpperCase());
+  const np = newPitch(name, d || raw);
+  state.pitches.push(np); saveShared('pitches', state.pitches);
+  Object.assign(pv, { open: np.id, tab: 'deals' });
+  toast(`New pitch created for ${name}. Read the website on tab 1 to fill in the profile.`, 6000);
+  showTab('pitches');
+});
 $('#dashboardView').addEventListener('click', e => {
   if (e.target.dataset.opendeal) return openDrawer(e.target.dataset.opendeal, 'acquisitions');
+  const oc = e.target.closest('[data-openco]');
+  if (oc) return openDrawer(oc.dataset.openco);
   const g = e.target.closest('[data-goproj]');
   if (g) { state.projectView = g.dataset.goproj; state.projectTab = g.dataset.gotab || 'overview'; return showTab('projects'); }
   if (e.target.dataset.go) showTab(e.target.dataset.go);

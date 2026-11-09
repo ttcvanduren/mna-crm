@@ -150,15 +150,7 @@ function overviewHtml(proj) {
 
     <div class="card span2">
       <h2>Offer comparison ${offers.length ? `<span class="muted">(${offers.length})</span>` : ''}</h2>
-      ${offers.length ? `<table class="compact offers"><thead><tr><th>Buyer</th><th>Type</th><th class="num">EV</th><th style="width:28%">Range vs valuation</th><th class="num">vs mid</th><th>Structure</th><th>Conditions</th><th>Certainty</th></tr></thead><tbody>
-        ${v.ev[1] ? `<tr class="muted"><td colspan="3"><i>Valuation indication</i></td><td>${bar(v.ev[0], v.ev[2], 'val')}</td><td></td><td colspan="3"></td></tr>` : ''}
-        ${offers.map(({ c, p }) => { const o = p.offer, lo = o.low ?? o.amount, hi = o.high ?? o.amount;
-          return `<tr data-open="${c.id}" style="cursor:pointer"><td><b>${esc(c.name)}</b></td><td>${esc(o.type || '')}</td><td class="num"><b>${o.high ? `${eur(lo)}–${eur(hi)}` : eur(o.amount)}</b></td>
-          <td>${lo != null ? bar(lo, hi, 'off') : ''}</td>
-          <td class="num ${v.ev[1] && o.amount >= v.ev[1] ? 'ok' : 'err'}">${v.ev[1] && o.amount ? (o.amount >= v.ev[1] ? '+' : '') + Math.round((o.amount / v.ev[1] - 1) * 100) + '%' : ''}</td>
-          <td class="small">${esc(o.structure || '')}${o.financing ? `<div class="muted">${esc(o.financing)}</div>` : ''}</td><td class="small muted">${esc(o.conditions || '')}</td>
-          <td>${o.certainty ? '●'.repeat(o.certainty) + '<span class="muted">' + '●'.repeat(5 - o.certainty) + '</span>' : ''}</td></tr>`; }).join('')}
-      </tbody></table>` : '<div class="empty">No offers yet. Drag a buyer to <b>IOI received</b> or <b>Binding offer</b> on the pipeline board to record price, structure and conditions.</div>'}
+      ${offers.length ? offerCardsHtml(offers, v, bar) : '<div class="empty">No offers yet. Drag a buyer to <b>IOI received</b> or <b>Binding offer</b> on the pipeline board to record price, structure and conditions.</div>'}
     </div>
 
     <div class="card span2">
@@ -173,19 +165,53 @@ function overviewHtml(proj) {
   </div>`;
 }
 
+// Offers side by side: price, how much is paid at close, earn-out, rollover, conditions and certainty; the best value per row is highlighted.
+function offerTerms(o) {
+  const s = String(o.structure || '');
+  const pct = re => { const m = s.match(re); return m ? Number(m[1]) : null; };
+  const earn = pct(/(\d{1,3})\s*%\s*(?:of the price\s*)?(?:as\s*)?(?:an?\s*)?earn[- ]?outs?/i), roll = pct(/(\d{1,3})\s*%\s*(?:equity\s*)?(?:roll[- ]?over|re-?invest\w*|rollover)/i);
+  let cash = pct(/(\d{1,3})\s*%\s*(?:cash|upfront|at clos\w*|on completion)/i);
+  if (cash == null && (earn != null || roll != null)) cash = Math.max(0, 100 - (earn || 0) - (roll || 0));
+  return { cash, earn, roll };
+}
+function offerCardsHtml(offers, v, bar) {
+  const rows = offers.map(({ c, p }) => ({ c, o: p.offer, t: offerTerms(p.offer) }));
+  const best = (f, hi = true) => { const xs = rows.map(f).filter(x => x != null); return xs.length > 1 ? (hi ? Math.max(...xs) : Math.min(...xs)) : null; };
+  const bPrice = best(r => r.o.amount), bCash = best(r => r.t.cash), bEarn = best(r => r.t.earn, false), bCert = best(r => r.o.certainty);
+  const line = (label, val, isBest) => `<div class="oc-line ${isBest ? 'best' : ''}"><span>${label}</span><b>${val ?? '<span class="muted">–</span>'}</b></div>`;
+  return `${v.ev[1] ? `<p class="muted small" style="margin:-6px 0 12px">Valuation indication ${eur(v.ev[0])} – ${eur(v.ev[2])} (mid ${eur(v.ev[1])}). Best value per line is highlighted.</p>` : ''}
+    <div class="offer-cards">${rows.map(({ c, o, t }) => {
+      const lo = o.low ?? o.amount, hi = o.high ?? o.amount, vs = v.ev[1] && o.amount ? Math.round((o.amount / v.ev[1] - 1) * 100) : null;
+      return `<div class="offer-card">
+        <div class="oc-head">${logo(c)}<div style="min-width:0"><button class="link co-name" data-open="${c.id}">${esc(c.name)}</button><div class="muted small">${esc([o.type, o.date].filter(Boolean).join(' · '))}</div></div></div>
+        <div class="oc-price ${o.amount != null && o.amount === bPrice ? 'best' : ''}">${o.high ? `${eur(lo)}–${eur(hi)}` : eur(o.amount)}${vs != null ? `<span class="${vs >= 0 ? 'ok' : 'err'}">${vs >= 0 ? '+' : ''}${vs}% vs mid</span>` : ''}</div>
+        ${lo != null && v.ev[1] ? bar(lo, hi, 'off') : ''}
+        ${line('Cash at close', t.cash != null ? t.cash + '%' : null, t.cash != null && t.cash === bCash)}
+        ${line('Earn-out', t.earn != null ? t.earn + '%' : null, t.earn != null && t.earn === bEarn)}
+        ${line('Rollover', t.roll != null ? t.roll + '%' : null, false)}
+        ${line('Financing', o.financing ? esc(o.financing) : null, false)}
+        ${line('Certainty', o.certainty ? `<span class="dots">${'●'.repeat(o.certainty)}<span class="muted">${'●'.repeat(5 - o.certainty)}</span></span>` : null, o.certainty && o.certainty === bCert)}
+        ${o.conditions ? `<div class="oc-cond"><span class="muted small">Conditions</span><div class="small">${esc(o.conditions)}</div></div>` : ''}
+        ${o.structure ? `<div class="muted small" style="margin-top:6px">${esc(o.structure)}</div>` : ''}
+      </div>`; }).join('')}</div>`;
+}
+
 // ---------- Pipeline board ----------
-const board = { tier: '', q: '' };
+const board = { tier: '', q: '', view: 'board', active: true };
 const COL_LIMIT = 60;
 function boardHtml(proj) {
   const q = board.q.toLowerCase();
   const all = members(proj.name).filter(({ c, p }) => (!board.tier || String(p.tier) === board.tier) && (!q || c.name.toLowerCase().includes(q)));
   const tiers = [...new Set(members(proj.name).map(m => m.p.tier).filter(Boolean))].sort();
   const daysSince = d => /^\d{4}-\d{2}-\d{2}/.test(d || '') ? Math.max(0, Math.round((Date.now() - new Date(d).getTime()) / 86400000)) : null;
-  return `<div class="filters">
-      <input type="search" id="boardSearch" placeholder="Find a buyer on the board…" value="${esc(board.q)}">
+  const head = `<div class="filters">
+      <div class="seg-tabs"><button data-pview="board" class="${board.view !== 'table' ? 'on' : ''}">Board</button><button data-pview="table" class="${board.view === 'table' ? 'on' : ''}">Deal progress</button></div>
+      <input type="search" id="boardSearch" placeholder="Find a buyer…" value="${esc(board.q)}">
       <select id="boardTier"><option value="">All tiers</option>${tiers.map(t => `<option ${String(t) === board.tier ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>
-      <span class="muted small">Drag cards between columns. Moving to <b>Offer</b> asks for the offer amount.</span>
-    </div>
+      ${board.view === 'table' ? `<label class="check"><input type="checkbox" id="boardActive" ${board.active ? 'checked' : ''}> Show active only</label>` : '<span class="muted small">Drag cards between columns. Moving to <b>Offer</b> asks for the offer amount.</span>'}
+    </div>`;
+  if (board.view === 'table') return head + progressHtml(all.filter(m => !board.active || !['Not approached', 'Passed'].includes(Engine.boardStage(m.p.status))), daysSince);
+  return `${head}
     <div class="board">${Engine.BOARD_STAGES.map(st => {
       const cards = all.filter(m => Engine.boardStage(m.p.status) === st).sort((a, b) => String(a.p.tier || 9).localeCompare(String(b.p.tier || 9)));
       const color = STAGE_COLORS[Engine.stageGroup(st)];
@@ -202,6 +228,32 @@ function boardHtml(proj) {
         }).join('')}${cards.length > COL_LIMIT ? `<div class="muted small" style="padding:6px">+ ${cards.length - COL_LIMIT} more (use the filters or the Buyers tab)</div>` : ''}</div>
       </div>`;
     }).join('')}</div>`;
+}
+
+// Deal progress (OffDeal-style table): stage, last activity with time, best contact, offer and why they fit.
+const BOARD_ORDER = st => Engine.BOARD_STAGES.indexOf(Engine.boardStage(st));
+function lastActivity(p) {
+  const first = String(p.log || '').split('\n').find(Boolean) || '';
+  const m = first.match(/^(\d{4}-\d{2}-\d{2})\s*[–-]\s*(.+)$/);
+  if (m) return { date: m[1], text: m[2] };
+  return p.last_contact ? { date: p.last_contact, text: p.status || 'Contacted' } : null;
+}
+function progressHtml(list, daysSince) {
+  const rows = [...list].sort((a, b) => BOARD_ORDER(b.p.status) - BOARD_ORDER(a.p.status) || String(lastActivity(b.p)?.date || '').localeCompare(String(lastActivity(a.p)?.date || '')));
+  if (!rows.length) return '<div class="empty">No buyers to show. Untick <b>Show active only</b> or add buyers with Find buyers.</div>';
+  return `<div class="table-wrap"><table class="data progress"><thead><tr><th>Buyer</th><th>Stage</th><th>Last activity</th><th>Best contact</th><th class="num">Offer</th><th>Relevant experience</th></tr></thead><tbody>
+    ${rows.slice(0, 400).map(({ c, p }) => {
+      const st = Engine.boardStage(p.status), la = lastActivity(p), d = la ? daysSince(la.date) : null, pc = Engine.bestContacts(c)[0];
+      const stale = d != null && d > 14 && !['Passed', 'Not approached'].includes(st);
+      return `<tr data-open-row="${c.id}">
+        <td><div class="co">${logo(c)}<div style="min-width:0"><div class="co-name">${esc(c.name)}</div><div class="co-sub">${p.tier ? `<span class="tier t${esc(p.tier)}">T${esc(p.tier)}</span> ` : ''}${esc(buyerKind(c))}${c.country ? ' · ' + esc(c.country) : ''}</div></div></div></td>
+        <td><span class="stage-pill" style="--c:${STAGE_COLORS[Engine.stageGroup(st)]}"><i></i>${esc(st)}</span>${p.status && p.status.replace(/^\d+[.)]\s*/, '').toLowerCase() !== st.toLowerCase() ? `<div class="muted small">${esc(p.status)}</div>` : ''}</td>
+        <td>${la ? `<div class="small">${esc(la.text.slice(0, 60))}</div><div class="small ${stale ? 'err' : 'muted'}">${d === 0 ? 'today' : d === 1 ? 'yesterday' : d != null ? `${d} days ago` : esc(la.date)}</div>` : '<span class="muted small">No activity yet</span>'}</td>
+        <td class="small">${pc ? `${esc(pc.name || pc.email)}${pc.title ? `<div class="muted">${esc(pc.title.slice(0, 40))}</div>` : ''}` : '<span class="muted">no contact</span>'}</td>
+        <td class="num">${p.offer?.amount ? `<b>${p.offer.high ? `${eur(p.offer.low)}–${eur(p.offer.high)}` : eur(p.offer.amount)}</b><div class="muted small">${esc(p.offer.type || '')}</div>` : ''}</td>
+        <td class="wrap small muted">${esc(String(p.rationale || c.short_description || '').replace(/^Match \d+: /, '').slice(0, 180))}</td>
+      </tr>`; }).join('')}
+  </tbody></table></div>`;
 }
 
 let dragId = null;
@@ -280,33 +332,26 @@ $('#stageDialog').addEventListener('close', () => {
 const find = { limit: FIND_LIMIT, picked: new Set(), type: '' };
 function findMatches(proj) {
   const inProject = new Set(members(proj.name).map(m => m.c.id));
-  return Engine.match(dealOf(proj), state.companies.filter(c => !inProject.has(c.id)), state.weights)
-    .filter(m => !find.type || (find.type === 'Strategic' ? m.company.role !== 'Investor' : m.company.role === 'Investor'));
+  return Engine.match(dealOf(proj), state.companies.filter(c => !inProject.has(c.id)), state.weights);
 }
+const findFiltered = (proj, all = findMatches(proj)) => find.type ? all.filter(m => buyerKind(m.company) === find.type) : all;
 function findHtml(proj) {
   if (!hasProfile(proj)) return `<div class="empty">First describe the company you're selling: sector, keywords and description.<br><br><button class="btn primary" data-x="editProfile">Add deal profile</button></div>`;
-  const all = findMatches(proj);
+  const every = findMatches(proj), all = findFiltered(proj, every);
   const list = all.slice(0, find.limit);
-  const tierOf = s => (s >= 65 ? '1' : s >= 45 ? '2' : '3');
-  return `<div class="callout"><span>✦</span><div><b>${all.length} candidate buyers</b> in your database that aren't on this project yet, ranked on
-      sector, keywords, M&A appetite, geography, size and how they behaved in earlier projects.</div></div>
+  const deal = dealOf(proj);
+  return `<div class="callout"><span>✦</span><div><b>${all.length.toLocaleString()} potential buyers</b> in your database that aren't on this project yet, ranked on
+      niche, relevant acquisitions, keywords, M&A appetite, geography, size and how they behaved in earlier projects.</div></div>
     <div class="filters">
-      <select id="findType"><option value="">Strategics + financial</option><option ${find.type === 'Strategic' ? 'selected' : ''}>Strategic</option><option value="Investor" ${find.type === 'Investor' ? 'selected' : ''}>Financial (PE / investors)</option></select>
-      <label class="row-label">Show top <input type="number" id="findLimit" value="${find.limit}" min="10" max="1000" style="width:80px"></label>
-      <button class="link small" data-x="weights">Adjust weights</button>
+      ${kindPills(every, find.type, 'data-fkind')}
       <span class="spacer"></span>
+      <label class="row-label small">Show top <input type="number" id="findLimit" value="${find.limit}" min="10" max="1000" style="width:72px"></label>
+      <button class="link small" data-x="weights">Adjust weights</button>
       <button class="btn" data-x="pickTop">Select top 50</button>
       <button class="btn primary" data-x="addPicked">Add ${find.picked.size || 'selected'} to ${esc(proj.name)}</button>
     </div>
-    <div class="table-wrap"><table class="data"><thead><tr><th class="cb"></th><th>Score</th><th>Company</th><th>Type</th><th>Country</th><th class="num">Employees</th><th>Why</th></tr></thead><tbody>
-      ${list.map(({ company: c, score, reasons }) => `<tr data-open-row="${c.id}">
-        <td class="cb"><input type="checkbox" data-fpick="${c.id}" ${find.picked.has(c.id) ? 'checked' : ''}></td>
-        <td><span class="score" style="background:${score >= 65 ? '#067647' : score >= 45 ? '#1d4ed8' : '#98a2b3'}">${score}</span> <span class="tier t${tierOf(score)}">T${tierOf(score)}</span></td>
-        <td>${companyCell(c)}</td>
-        <td>${c.role === 'Investor' ? '<span class="chip role-Investor">Financial</span>' : '<span class="chip role-Buyer">Strategic</span>'}</td>
-        <td>${esc(c.country || '')}</td><td class="num">${c.employees != null ? Engine.fmt(c.employees) : ''}</td>
-        <td class="wrap">${conflictChip(c, proj.name)}${reasons.map(r => `<span class="chip ${/^(Reached|Signed)/.test(r) ? 'green' : /^Passed/.test(r) ? 'red' : /acqui|add-on/i.test(r) ? 'purple' : ''}">${esc(r)}</span>`).join('')}</td>
-      </tr>`).join('') || '<tr><td colspan="7"><div class="empty">No candidates. Add keywords to the deal profile or import more lists.</div></td></tr>'}
+    <div class="table-wrap"><table class="data buyer-list"><thead><tr><th class="cb"></th>${BUYER_HEAD}</tr></thead><tbody>
+      ${list.map(m => buyerRow(m, deal, { pick: 'data-fpick', picked: find.picked, extraWhy: conflictChip(m.company, proj.name) })).join('') || '<tr><td colspan="6"><div class="empty">No candidates. Add keywords to the deal profile or import more lists.</div></td></tr>'}
     </tbody></table></div>`;
 }
 function addToProject(proj, ids) {
@@ -354,7 +399,11 @@ $('#projectsView').addEventListener('click', e => {
   if (x === 'editProfile') return openProjectDialog(proj.name);
   if (x === 'resetMult') { delete proj.multiples; saveProjects(); return renderProjects(); }
   if (x === 'weights') return showTab('match');
-  if (x === 'pickTop') { findMatches(proj).slice(0, 50).forEach(m => find.picked.add(m.company.id)); return renderProjects(); }
+  const fk = e.target.closest('[data-fkind]');
+  if (fk) { find.type = fk.dataset.fkind; return renderProjects(); }
+  const pv = e.target.closest('[data-pview]');
+  if (pv) { board.view = pv.dataset.pview; return renderProjects(); }
+  if (x === 'pickTop') { findFiltered(proj).slice(0, 50).forEach(m => find.picked.add(m.company.id)); return renderProjects(); }
   if (x === 'addPicked') { if (!find.picked.size) return toast('Tick the buyers to add first.'); addToProject(proj, [...find.picked]); return renderProjects(); }
   if (x === 'fuMarked') {
     const picked = $$('[data-fu]:checked');
@@ -373,6 +422,8 @@ $('#projectsView').addEventListener('click', e => {
   if (x === 'fuEmail') { const ids = fuPicked(); if (!ids.length) return toast('Select buyers first.'); return emailFromProject(proj.name, ids); }
   if (e.target.dataset.fpick) { e.target.checked ? find.picked.add(e.target.dataset.fpick) : find.picked.delete(e.target.dataset.fpick); const b = $('[data-x=addPicked]'); if (b) b.textContent = `Add ${find.picked.size || 'selected'} to ${proj.name}`; return; }
   if (e.target.id === 'fuAll') { $$('[data-fu]').forEach(cb => (cb.checked = e.target.checked)); return; }
+  const ob = e.target.closest('button[data-open]');
+  if (ob) return openDrawer(ob.dataset.open, 'projects');
   if (e.target.closest('input,a,button,select')) return;
   const open = e.target.closest('[data-open],[data-open-row],[data-card]');
   if (open) openDrawer(open.dataset.open || open.dataset.openRow || open.dataset.card, 'projects');
@@ -390,9 +441,9 @@ $('#projectsView').addEventListener('change', e => {
     saveProjects();
     return renderProjects();
   }
-  if (t.id === 'findType') { find.type = t.value; return renderProjects(); }
   if (t.id === 'findLimit') { find.limit = Math.max(10, Number(t.value) || FIND_LIMIT); return renderProjects(); }
   if (t.id === 'boardTier') { board.tier = t.value; return renderProjects(); }
+  if (t.id === 'boardActive') { board.active = t.checked; return renderProjects(); }
 });
 let boardTimer;
 $('#projectsView').addEventListener('input', e => {

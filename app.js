@@ -59,7 +59,11 @@ const state = {
 
 function toast(msg, ms = 3500) {
   const t = $('#toast');
-  t.textContent = msg;
+  const kind = /fail|error|could ?n[o']t|cannot|invalid|missing/i.test(msg) ? 'err' : /saved|added|imported|done|merged|created|updated|copied|downloaded|restored/i.test(msg) ? 'ok' : '';
+  t.className = kind;
+  t.innerHTML = `<span class="t-ico">${kind === 'err' ? '!' : kind === 'ok' ? '✓' : 'i'}</span><span></span>`;
+  t.lastChild.textContent = msg;
+  void t.offsetWidth; // restart the slide-in
   t.classList.add('show');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => t.classList.remove('show'), ms);
@@ -206,11 +210,70 @@ $$('.tab').forEach(b => b.addEventListener('click', () => { if (b.dataset.tab ==
 
 // ---------- Small renderers ----------
 const initials = s => (norm(s).match(/[A-Za-z0-9]/g) || ['?']).slice(0, 2).join('').toUpperCase();
+// A stable colour per name, so a company or person always gets the same initials badge.
+const hueOf = s => { let h = 2166136261; for (const ch of String(s || '')) h = Math.imul(h ^ ch.charCodeAt(0), 16777619); return Math.round(((h >>> 0) % 97) * 137.508) % 360; };
 function logo(c, lg) {
   const d = c._domain || Engine.domainOf(c.website);
   const i = esc(initials(c.name));
-  return `<span class="co-logo ${lg ? 'lg' : ''}" data-i="${i}">${d ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=64" alt="" loading="lazy" onerror="this.parentNode.textContent=this.parentNode.dataset.i">` : i}</span>`;
+  const fallback = "this.parentNode.classList.add('ini');this.parentNode.textContent=this.parentNode.dataset.i";
+  return `<span class="co-logo ${lg ? 'lg' : ''} ${d ? '' : 'ini'}" style="--h:${hueOf(c.name)}" data-i="${i}">${d ? `<img src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(d)}&sz=64" alt="" loading="lazy" onerror="${fallback}" onload="if(this.naturalWidth<=16){${fallback}}">` : i}</span>`;
 }
+const personAvatar = p => `<div class="avatar ini" style="--h:${hueOf(p.name || p.email)}">${esc(initials(p.name || p.email))}</div>`;
+// Badges: what kind of company this is at a glance (research, deal appetite, ownership, reachable contact, live mandates).
+function badges(c, { all = false } = {}) {
+  const n = (c.acquisitions || []).length, own = Engine.ownershipType(c.ownership);
+  const out = [];
+  if (c.watched) out.push('<span class="bdg deal" title="On your watchlist">★</span>');
+  if (all && c.enrichment) out.push('<span class="bdg res" title="Researched with Claude">✦ Researched</span>');
+  if (n >= 5 || c.enrichment?.is_acquisitive === 'yes') out.push(`<span class="bdg acq" title="${n} acquisitions on record">Acquisitive${n ? ' · ' + n : ''}</span>`);
+  if (own === 'PE-backed' || own === 'VC-backed') out.push(`<span class="bdg pe" title="${esc(c.ownership)}">${own}</span>`);
+  else if (own === 'Listed' || c.ticker) out.push(`<span class="bdg pe" title="${esc(c.ownership || c.ticker || '')}">Listed${c.ticker ? ' · ' + esc(c.ticker) : ''}</span>`);
+  if (all && Engine.hasEmail(c)) out.push('<span class="bdg mail" title="Has a contact with an email address">✉ Reachable</span>');
+  if (all && c.projects.length) out.push(`<span class="bdg deal">In ${c.projects.length} mandate${c.projects.length > 1 ? 's' : ''}</span>`);
+  return out.length ? `<span class="badge-row">${out.join('')}</span>` : '';
+}
+
+// What changed since you started watching a company (new deals / people).
+function watchNews(c) {
+  const s = c.watch_seen || {}, deals = Math.max(0, (c.acquisitions || []).length - (s.deals ?? 0)), people = Math.max(0, c.contacts.length - (s.people ?? 0));
+  return { deals, people, total: deals + people };
+}
+
+// ---------- Buyer list (shared by Buyer search and Find buyers in a project) ----------
+// Kind of buyer for the filter pills: strategic, PE / financial, or family office.
+function buyerKind(c) {
+  if (c.role !== 'Investor') return 'Strategic';
+  return /family office|family holding|familie/i.test([c.name, c.ownership, c.short_description, (c.tags || []).join(' ')].join(' ')) ? 'Family office' : 'Financial';
+}
+const BUYER_KINDS = [['', 'All'], ['Strategic', 'Strategic'], ['Financial', 'Private equity & investors'], ['Family office', 'Family offices']];
+function kindPills(matches, current, attr) {
+  const n = { '': matches.length };
+  for (const m of matches) { const k = buyerKind(m.company); n[k] = (n[k] || 0) + 1; }
+  return `<div class="pills">${BUYER_KINDS.filter(([k]) => !k || n[k]).map(([k, l]) => `<button class="pill ${k === current ? 'on' : ''}" ${attr}="${k}">${l} <span>${(n[k] || 0).toLocaleString()}</span></button>`).join('')}</div>`;
+}
+const scoreHtml = s => { const t = s >= 65 ? '1' : s >= 45 ? '2' : '3'; return `<div class="sc"><b class="score" style="background:${scoreColor(s)}">${s}</b><span class="tier t${t}">Tier ${t}</span></div>`; };
+// One buyer row: score · buyer (logo, type, country, badges, contact) · about · relevant acquisitions · why it fits.
+function buyerRow(m, deal, { pick, picked, extraWhy = '', done }) {
+  const c = m.company, pc = Engine.primaryContact(c);
+  const deals = deal ? Engine.relevantDeals(deal, c, 3) : [];
+  const more = (c.acquisitions || []).length - deals.length;
+  const about = c.short_description || c.summary || c.description || '';
+  const why = m.reasons.filter(r => !/^Bought /.test(r));
+  return `<tr class="bl-row" data-open-row="${c.id}">
+    <td class="cb"><input type="checkbox" ${pick}="${c.id}" ${picked.has(c.id) ? 'checked' : ''}></td>
+    <td>${scoreHtml(m.score)}</td>
+    <td class="bl-buyer"><div class="co">${logo(c)}<div style="min-width:0">
+      <div class="co-line"><button class="link co-name" data-open="${c.id}">${esc(c.name)}</button>${done?.has(c.id) ? '<span class="chip green">emailed</span>' : ''}</div>
+      <div class="co-sub">${esc([buyerKind(c), c.niche || c.sector, c.country].filter(Boolean).join(' · '))}</div>
+      <div style="margin-top:4px">${badges(c)}</div>
+      ${pc?.email ? `<div class="muted small" style="margin-top:3px">✉ ${esc(pc.name || pc.email)}${pc.role_tag ? ` · ${esc(tagShort(pc.role_tag))}` : ''}</div>` : ''}
+    </div></div></td>
+    <td class="bl-about">${about ? `<div class="clamp">${esc(about)}</div>` : '<span class="muted">No description yet</span>'}</td>
+    <td class="bl-acq">${deals.length ? `<ul>${deals.map(d => `<li class="${d.rel >= 0.8 ? 'hit' : d.rel ? 'near' : ''}" title="${esc([d.niche, d.a.description || d.a.why || ''].filter(Boolean).join(' – ').slice(0, 300))}"><b>${esc(d.a.target)}</b>${d.year ? ` <span class="muted">${d.year}</span>` : ''}</li>`).join('')}</ul>${more > 0 ? `<div class="muted small">+ ${more} more</div>` : ''}` : '<span class="muted small">No deals on record</span>'}</td>
+    <td class="bl-why">${extraWhy}${why.map(r => `<span class="chip ${/^(Reached|Signed)/.test(r) ? 'green' : /^Passed/.test(r) ? 'red' : /acqui|add-on/i.test(r) ? 'purple' : ''}">${esc(r)}</span>`).join('')}</td>
+  </tr>`;
+}
+const BUYER_HEAD = '<th>Score</th><th>Buyer</th><th>About</th><th>Relevant acquisitions</th><th>Why it fits</th>';
 // Stored values stay 'Buyer' / 'Investor'; on screen they're Strategic / Financial.
 const ROLE_LABEL = { Buyer: 'Strategic', Investor: 'Financial' };
 const roleLabel = r => ROLE_LABEL[r] || r;
@@ -221,7 +284,11 @@ const KEY_TAGS = new Set(['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strateg
 const tagShort = t => ({ 'Corporate Development': 'CorpDev', Strategy: 'Strat' }[t] || t);
 const projectChips = c => (c.projects || []).filter(p => p.project).map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}" title="${esc([p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ': ' + esc(p.status.slice(0, 22)) : ''}</span>`).join('');
 const daysAgo = iso => Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
-const ago = iso => { const d = daysAgo(iso); return d === 0 ? 'today' : d === 1 ? 'yesterday' : `${d}d ago`; };
+const ago = iso => {
+  const d = daysAgo(iso);
+  if (!Number.isFinite(d)) return '';
+  return d === 0 ? 'today' : d === 1 ? 'yesterday' : d < 14 ? `${d} days ago` : d < 60 ? `${Math.round(d / 7)} weeks ago` : d < 730 ? `${Math.round(d / 30)} months ago` : `${Math.round(d / 365)} years ago`;
+};
 const contactText = c => (c.contacts || []).map(x => [x.name, x.title, x.email].join(' ')).join(' ');
 
 // ---------- Companies list ----------
@@ -240,6 +307,7 @@ function filteredCompanies() {
     (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
     (!multi || c.projects.length > 1) &&
     (!$('#filterAcq').checked || (c.acquisitions || []).length >= 3) &&
+    (!$('#filterWatch').checked || c.watched) &&
     (!enr || (enr === 'yes') === !!c.enrichment) &&
     (!email || Engine.hasEmail(c)) &&
     (!q || [c.name, (c.aliases || []).join(' '), c.website, c.sector, c.subsector, c.country, c.ownership, c.keywords, (c.tags || []).join(' '), c.short_description, c.summary, c.description, c.acquisition_focus, c.target_sectors, contactText(c)].join(' ').toLowerCase().includes(q)));
@@ -285,6 +353,7 @@ function renderCompanies() {
   $('#checkAllCompanies').checked = shown.length > 0 && shown.every(c => state.picked.has(c.id));
   renderBulkBar();
   renderFilterOptions();
+  renderFilterChips(list.length);
   renderData(); // keeps the source counts current when the Data page is open
 }
 
@@ -326,11 +395,53 @@ function renderBulkBar() {
 
 let searchTimer;
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.limit = 200; renderCompanies(); }, 150); });
-const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti', '#filterAcq'];
+const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti', '#filterAcq', '#filterWatch'];
 FILTERS.forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
-$('#clearFilters').addEventListener('click', () => {
+function clearCompanyFilters() {
   FILTERS.forEach(s => { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
   $('#search').value = '';
+}
+
+// Quick filters (one click), chips for the active filters, and saved searches.
+const QUICK = [
+  ['Strategic', '#filterRole', 'Buyer'], ['Financial', '#filterRole', 'Investor'], ['Acquisitive', '#filterAcq', true],
+  ['Researched', '#filterEnriched', 'yes'], ['Reachable', '#filterEmail', true], ['In 2+ projects', '#filterMulti', true], ['★ Watched', '#filterWatch', true],
+];
+const filterVal = el => (el.type === 'checkbox' ? el.checked : el.value);
+const FILTER_NAMES = { '#filterEmail': 'Has email', '#filterMulti': 'In 2+ projects', '#filterAcq': 'Acquisitive (3+ deals)', '#filterWatch': 'Watched' };
+function renderFilterChips(count) {
+  $('#quickFilters').innerHTML = QUICK.map(([l, s, v], i) => `<button class="pill ${filterVal($(s)) === v ? 'on' : ''}" data-quick="${i}">${esc(l)}</button>`).join('');
+  const active = [];
+  if ($('#search').value.trim()) active.push(['#search', `“${$('#search').value.trim()}”`]);
+  for (const s of FILTERS) {
+    const el = $(s);
+    if (el.type === 'checkbox' ? el.checked : el.value) active.push([s, el.type === 'checkbox' ? FILTER_NAMES[s] : el.selectedOptions[0]?.textContent || el.value]);
+  }
+  $('#activeFilters').innerHTML = active.length ? `<span class="muted small"><b>${count.toLocaleString()}</b> match</span>${active.map(([s, l]) => `<span class="fchip">${esc(l)}<button data-unfilter="${s}" title="Remove">×</button></span>`).join('')}<button class="link small" data-unfilter="all">Clear all</button>` : '';
+  const saved = state.savedSearches || [];
+  $('#savedSearches').innerHTML = `${saved.map((s, i) => `<span class="saved-chip"><button data-saved="${i}" title="Apply this saved search">${esc(s.name)}</button><button data-unsave="${i}" title="Delete">×</button></span>`).join('')}
+    ${active.length ? '<button class="btn sm" id="saveSearch">☆ Save search</button>' : ''}`;
+}
+$('#tab-companies').addEventListener('click', e => {
+  const q = e.target.closest('[data-quick]'), un = e.target.closest('[data-unfilter]'), sv = e.target.closest('[data-saved]'), del = e.target.closest('[data-unsave]');
+  if (q) { const [, s, v] = QUICK[+q.dataset.quick], el = $(s); if (el.type === 'checkbox') el.checked = !el.checked; else el.value = el.value === v ? '' : v; }
+  else if (un) { const s = un.dataset.unfilter; if (s === 'all') clearCompanyFilters(); else if (s === '#search') $('#search').value = ''; else { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; } }
+  else if (sv) {
+    const f = state.savedSearches[+sv.dataset.saved].f;
+    clearCompanyFilters();
+    renderFilterOptions(); // make sure the options exist before setting them
+    for (const [s, v] of Object.entries(f)) { const el = $(s); if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
+  } else if (del) { state.savedSearches.splice(+del.dataset.unsave, 1); saveShared('savedSearches', state.savedSearches); }
+  else if (e.target.id === 'saveSearch') {
+    const name = prompt('Name this search (e.g. "NL ERP buyers > 250 FTE"):');
+    if (!name) return;
+    const f = { '#search': $('#search').value };
+    for (const s of FILTERS) { const v = filterVal($(s)); if (v) f[s] = v; }
+    (state.savedSearches ||= []).push({ name: name.trim().slice(0, 60), f });
+    saveShared('savedSearches', state.savedSearches);
+    toast(`Search “${name.trim()}” saved.`);
+  } else return;
+  state.limit = 200;
   renderCompanies();
 });
 $('#companyTable thead').addEventListener('click', e => {
@@ -650,6 +761,8 @@ function acquisitionsTabHtml(c) {
 
 function openDrawer(id, tab = 'overview') {
   state.drawer = { id, tab };
+  const wc = byId(id);
+  if (wc?.watched && watchNews(wc).total) { wc.watch_seen = { deals: (wc.acquisitions || []).length, people: wc.contacts.length }; touch(wc); }
   $('#drawer').hidden = false;
   $('#drawerBackdrop').hidden = false;
   renderDrawer();
@@ -698,13 +811,9 @@ function renderDrawer() {
         ${fact('Industry / niche', `<select data-niche="${c.id}" class="niche-select"><option value="">${c.niche_auto || !c.niche ? 'Auto' : 'Auto (clear)'}</option>${Taxonomy.INDUSTRIES.map(ind => `<optgroup label="${esc(ind)}">${Taxonomy.NICHES.filter(n => n.industry === ind).map(n => `<option ${n.niche === c.niche ? 'selected' : ''}>${esc(n.niche)}</option>`).join('')}</optgroup>`).join('')}</select>
           <div class="muted small">${esc(c.industry || 'No niche found')}${c.niche_auto ? ' · auto' : c.niche ? ' · set by you' : ''}${Engine.nichesOf(c).length > 1 ? ` · also ${esc(Engine.nichesOf(c).slice(1, 3).map(n => n.niche).join(', '))}` : ''}</div>`)}
         ${fact('Sector (source label)', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
-        ${fact('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', ')))}
-        ${fact('Founded', esc(c.founded))}
         ${fact('Ownership', esc(c.ownership))}
-        ${fact('Employees', c.employees != null ? Engine.fmt(c.employees) : '')}
-        ${fact('On LinkedIn', c.linkedin_employees_text ? esc(c.linkedin_employees_text) : c.linkedin_employees != null ? Engine.fmt(c.linkedin_employees) : '')}
-        ${fact('Revenue', money(c, c.revenue))}
-        ${fact('EBITDA', money(c, c.ebitda))}
+        ${fact('Employees (total)', c.employees != null && c.linkedin_employees != null ? Engine.fmt(c.employees) : '')}
+        ${fact('On LinkedIn', c.linkedin_employees_text ? esc(c.linkedin_employees_text) : '')}
         ${fact('Acquisitive', e?.is_acquisitive && e.is_acquisitive !== 'unknown' ? esc(e.is_acquisitive) : '')}
         ${fact('Ticker', esc(c.ticker))}
         ${fact('CRM status', esc(c.status))}
@@ -722,7 +831,7 @@ function renderDrawer() {
     const order = t => ['CEO', 'CFO', 'Corporate Development', 'M&A', 'Strategy', 'Founder', 'COO', 'CTO', 'Chairman', 'Board'].indexOf(t) + 1 || 99;
     const people = [...c.contacts].sort((a, b) => order(a.role_tag) - order(b.role_tag));
     body = people.length ? `<div class="people">${people.map(p => `<div class="person">
-        <div class="avatar">${esc(initials(p.name || p.email))}</div>
+        ${personAvatar(p)}
         <div style="min-width:0">
           <div class="nm">${esc(p.name || p.email)} ${p.role_tag ? `<span class="tag k">${esc(tagShort(p.role_tag))}</span>` : ''}</div>
           <div class="ti">${esc(p.title || '')}</div>
@@ -757,27 +866,62 @@ function renderDrawer() {
         <ul class="small">${(e.sources || []).map(u => `<li><a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a></li>`).join('')}</ul>` : '<div class="muted small">Not researched yet.</div>'}`;
   }
 
+  // Header metric row (Flippa-style: small label over a bold value).
+  const acqN = (c.acquisitions || []).length, emp = employeesOf(c);
+  const metric = (k, v) => `<div class="metric"><span>${k}</span>${v ? `<b>${v}</b>` : '<b class="none">–</b>'}</div>`;
+  const lastDeal = acqN ? String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4) : '';
+  const metrics = [
+    metric('Revenue', money(c, c.revenue)),
+    metric('EBITDA', money(c, c.ebitda)),
+    metric('Employees', emp != null ? Engine.fmt(emp) : ''),
+    metric('Acquisitions', acqN ? `${acqN}${lastDeal ? ` <span class="muted small">· last ${esc(lastDeal)}</span>` : ''}` : ''),
+    metric('Founded', esc(c.founded || '')),
+    metric('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', '))),
+    metric('Ownership', esc(Engine.ownershipType(c.ownership) || '')),
+  ].join('');
+  // Data completeness (like a listing's verification checklist).
+  const checks = [
+    ['Website', !!c.website], ['LinkedIn page', !!c.linkedin_url], ['Description', !!(c.short_description || c.summary || c.description)],
+    ['Niche classified', !!c.niche], ['Key people', c.contacts.length > 0], ['Verified email', Engine.hasEmail(c)],
+    ['Deal history', acqN > 0 || !!c.acq_checked_at], ['Financials', c.revenue != null || c.ebitda != null], ['Researched', !!e],
+  ];
+  const done = checks.filter(x => x[1]).length;
+  const side = `<aside class="co-side">
+      <div class="side-card">
+        <h4>Actions</h4>
+        <button class="btn primary" data-act="match">Find matches</button>
+        <button class="btn watch ${c.watched ? 'on' : ''}" data-act="watch" title="Watched companies show up on the dashboard when new deals or people come in">${c.watched ? '★ Watching' : '☆ Watch'}</button>
+        <button class="btn" data-act="people">Find decision makers</button>
+        <button class="btn" data-act="export" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
+        <button class="btn" data-act="research" ${researching ? 'disabled' : ''} title="Research directly via the Anthropic API (paid per company)">${researching ? 'Researching…' : e ? '↻ Research via API' : 'Research via API'}</button>
+        <button class="btn" data-act="edit">Edit company</button>
+      </div>
+      <div class="side-card">
+        <h4>Profile completeness</h4>
+        <div class="completeness"><div class="bar"><div style="width:${Math.round(done / checks.length * 100)}%"></div></div><b class="small">${done}/${checks.length}</b></div>
+        <ul class="checklist">${checks.map(([l, ok]) => `<li class="${ok ? 'on' : ''}"><i>✓</i>${l}</li>`).join('')}</ul>
+        ${e ? `<p class="muted small" style="margin:10px 0 0">Researched ${esc(ago(e.at))}</p>` : ''}
+      </div>
+    </aside>`;
+
   $('#drawer').innerHTML = `<div class="drawer-head">
       <div class="drawer-title">${logo(c, true)}
-        <div style="min-width:0"><h2>${esc(c.name)}</h2>
+        <div style="min-width:0;flex:1"><h2>${esc(c.name)}</h2>
           <div class="drawer-links">
-            ${c.website ? `<a href="${esc(Engine.cleanUrl(c.website))}" target="_blank" rel="noopener">🌐 ${esc(c._domain || c.website)}</a>` : ''}
-            ${c.linkedin_url ? `<a href="${esc(c.linkedin_url)}" target="_blank" rel="noopener">in LinkedIn ↗</a>` : ''}
             ${roleChip(c.role)}
+            ${c.niche ? `<span class="muted">${esc(c.niche)}</span>` : c.sector ? `<span class="muted">${esc(c.sector)}</span>` : ''}
+            ${c.website ? `<a href="${esc(Engine.cleanUrl(c.website))}" target="_blank" rel="noopener">${esc(c._domain || c.website)} ↗</a>` : ''}
+            ${c.linkedin_url ? `<a class="ext li" href="${esc(c.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
             ${c.merged_from?.length ? `<span class="chip purple" title="Combined from ${c.merged_from.length + 1} records">⧉ ${c.merged_from.length + 1} records combined</span>` : ''}
           </div>
-          ${c.aliases?.length ? `<div class="muted small">Also known as: ${esc(c.aliases.join(' · '))}</div>` : ''}</div>
-        <div class="drawer-actions">
-          <button class="btn ${e ? '' : 'primary'}" data-act="export" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
-          <button class="btn" data-act="research" ${researching ? 'disabled' : ''} title="Research directly via the Anthropic API (paid per company)">${researching ? 'Researching…' : e ? '↻ Research via API' : 'Research via API'}</button>
-          <button class="btn" data-act="edit">Edit</button>
-          <button class="btn" data-act="match">Find matches</button>
-          <button class="btn ghost" data-act="close" title="Close (Esc)">✕</button>
-        </div>
+          <div class="drawer-badges">${badges(c, { all: true })}</div>
+          ${c.aliases?.length ? `<div class="muted small" style="margin-top:6px">Also known as: ${esc(c.aliases.join(' · '))}</div>` : ''}</div>
+        <button class="drawer-close" data-act="close" title="Close (Esc)">✕</button>
       </div>
+      <div class="metrics">${metrics}</div>
       <div class="drawer-tabs">${tabs.map(([k, l]) => `<button data-dtab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div>
     </div>
-    <div class="drawer-body">${body}</div>`;
+    <div class="drawer-body"><div class="co-page"><div class="co-main">${body}</div>${side}</div></div>`;
 }
 $('#drawer').addEventListener('click', e => {
   if (!state.drawer) return;
@@ -792,6 +936,12 @@ $('#drawer').addEventListener('click', e => {
   if (t.dataset.dtab) { state.drawer.tab = t.dataset.dtab; return renderDrawer(); }
   const act = t.dataset.act;
   if (act === 'close') closeDrawer();
+  if (act === 'watch') {
+    const c = byId(id);
+    if (c.watched) { delete c.watched; delete c.watch_seen; delete c.watched_at; toast(`Stopped watching ${c.name}.`); }
+    else { Object.assign(c, { watched: true, watched_at: new Date().toISOString(), watch_seen: { deals: (c.acquisitions || []).length, people: c.contacts.length } }); toast(`Watching ${c.name}: new deals and people show up on the dashboard.`); }
+    touch(c); renderDrawer(); return;
+  }
   if (act === 'edit') openEdit(id);
   if (act === 'research') startResearch([id], { force: true });
   if (act === 'people') findDecisionMakers(id);
@@ -1341,7 +1491,7 @@ function contactedFor(dealId) {
 function runMatch() {
   renderRoleFilters();
   const deal = byId(state.campaign.dealId);
-  if (!deal) { $('#matchTable tbody').innerHTML = '<tr><td colspan="9"><div class="empty">Choose a company on the left to find matches.</div></td></tr>'; if (!state.campaign.project) syncCampaign(); return; }
+  if (!deal) { $('#matchKinds').innerHTML = ''; $('#matchTable tbody').innerHTML = '<tr><td colspan="6"><div class="empty">Choose a company on the left to find matches.</div></td></tr>'; if (!state.campaign.project) syncCampaign(); return; }
   const onlyEmail = $('#onlyWithEmail').checked, hide = $('#hideContacted').checked;
   const min = Number($('#minScore').value) || 0;
   const done = contactedFor(deal.id);
@@ -1350,22 +1500,16 @@ function runMatch() {
     (!state.roleFilter.size || state.roleFilter.has(m.company.role || '')) &&
     (!onlyEmail || Engine.hasEmail(m.company)) &&
     (!hide || !done.has(m.company.id)));
-  $('#matchCount').textContent = `(${state.matches.length})`;
-  $('#matchTable tbody').innerHTML = state.matches.slice(0, 500).map(({ company: c, score, reasons }) => {
-    const pc = Engine.primaryContact(c);
-    const n = c.contacts.filter(x => x.email).length;
-    return `<tr>
-      <td class="cb"><input type="checkbox" data-sel="${c.id}" ${state.selected.has(c.id) ? 'checked' : ''}></td>
-      <td><span class="score" style="background:${scoreColor(score)}">${score}</span></td>
-      <td><div class="co">${logo(c)}<button class="link co-name" data-open="${c.id}">${esc(c.name)}</button>${done.has(c.id) ? ' <span class="chip green">emailed</span>' : ''}</div></td>
-      <td>${roleChip(c.role)}</td><td>${esc(c.sector)}</td><td>${esc(c.country)}</td>
-      <td class="num">${money(c, c.revenue)}</td><td>${esc(pc?.email || '')}${n > 1 ? ` <span class="muted">+${n - 1}</span>` : ''}</td>
-      <td class="wrap">${reasons.map(r => `<span class="chip">${esc(r)}</span>`).join('')}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="9"><div class="empty">No matches. Try lowering the minimum score or changing the role filter.</div></td></tr>';
+  // Pills: all / strategic / PE / family office, with counts (OffDeal-style).
+  $('#matchKinds').innerHTML = kindPills(state.matches, state.matchKind || '', 'data-mkind');
+  if (state.matchKind) state.matches = state.matches.filter(m => buyerKind(m.company) === state.matchKind);
+  $('#matchCount').textContent = `(${state.matches.length.toLocaleString()})`;
+  $('#matchTable tbody').innerHTML = state.matches.slice(0, 300).map(m => buyerRow(m, deal, { pick: 'data-sel', picked: state.selected, done })).join('')
+    || '<tr><td colspan="6"><div class="empty">No matches. Try lowering the minimum score or changing the role filter.</div></td></tr>';
   syncCampaign();
 }
-const scoreColor = s => (s >= 70 ? '#067647' : s >= 45 ? '#1d4ed8' : s >= 25 ? '#b54708' : '#98a2b3');
+const scoreColor = s => (s >= 70 ? '#2f6b45' : s >= 45 ? '#23466f' : s >= 25 ? '#9a5b13' : '#a39d91');
+$('#matchKinds').addEventListener('click', e => { const b = e.target.closest('[data-mkind]'); if (b) { state.matchKind = b.dataset.mkind; runMatch(); } });
 
 $('#matchTable').addEventListener('change', e => {
   const id = e.target.dataset.sel;
@@ -1373,7 +1517,11 @@ $('#matchTable').addEventListener('change', e => {
   e.target.checked ? state.selected.add(id) : state.selected.delete(id);
   syncCampaign();
 });
-$('#matchTable').addEventListener('click', e => { if (e.target.dataset.open) openDrawer(e.target.dataset.open); });
+$('#matchTable').addEventListener('click', e => {
+  if (e.target.closest('input,a')) return;
+  const id = e.target.closest('[data-open]')?.dataset.open || e.target.closest('[data-open-row]')?.dataset.openRow;
+  if (id) openDrawer(id);
+});
 $('#checkAll').addEventListener('change', e => { state.matches.forEach(m => (e.target.checked ? state.selected.add(m.company.id) : state.selected.delete(m.company.id))); runMatch(); });
 $('#selectTop').addEventListener('click', () => { state.matches.slice(0, 25).forEach(m => state.selected.add(m.company.id)); runMatch(); });
 $('#selectNone').addEventListener('click', () => { state.selected.clear(); runMatch(); });
@@ -1696,7 +1844,7 @@ $('#signOut').addEventListener('click', async () => { try { const app = getMsal(
 
 // ---------- Backup ----------
 // A backup is the complete database: companies, projects, transactions and settings. It doubles as the master file.
-const backupData = () => ({ version: 5, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, pitches: state.pitches || [], transactions: state.transactions, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory });
+const backupData = () => ({ version: 5, exported: new Date().toISOString(), companies: state.companies.map(({ _norm, _domain, ...c }) => c), projects: state.projects, pitches: state.pitches || [], transactions: state.transactions, templates: state.templates, activity: state.activity, weights: state.weights, mappingMemory: state.mappingMemory, savedSearches: state.savedSearches || [] });
 $('#backup').addEventListener('click', () => {
   const data = backupData();
   const a = document.createElement('a');
@@ -1733,6 +1881,7 @@ $('#restore').addEventListener('change', async e => {
     if (d.templates?.length) { state.templates = d.templates; saveShared('templates', state.templates); }
     if (d.weights) { state.weights = d.weights; saveShared('weights', state.weights); }
     if (d.mappingMemory) { state.mappingMemory = d.mappingMemory; saveShared('mappingMemory', state.mappingMemory); }
+    if (d.savedSearches?.length) { state.savedSearches = d.savedSearches; saveShared('savedSearches', state.savedSearches); }
     await flush();
     renderAll();
     toast('Backup restored.');
@@ -1785,9 +1934,10 @@ function renderAll() {
 // ---------- Start ----------
 async function loadData() {
   setSync('Loading…');
-  const [companies, templates, activity, weights, mapping, projects, pitches] = await Promise.all([
-    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null), Store.getState('pitches', null),
+  const [companies, templates, activity, weights, mapping, projects, pitches, saved] = await Promise.all([
+    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null), Store.getState('pitches', null), Store.getState('savedSearches', null),
   ]);
+  state.savedSearches = saved || [];
   state.companies = companies.map(migrate);
   state.projects = projects || [];
   state.pitches = pitches || [];

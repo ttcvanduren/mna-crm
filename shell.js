@@ -22,6 +22,19 @@ const svg = name => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none"
 $$('[data-icon]').forEach(el => { (el.classList.contains('ico') ? el : el.querySelector('.ico')).innerHTML = svg(el.dataset.icon); });
 $$('.tab').forEach(b => { b.title = b.querySelector('.lbl')?.textContent || ''; });
 
+// Loading placeholders until the database has loaded (the first render replaces them).
+{
+  const row = () => `<tr><td class="cb"></td><td><div class="co"><span class="skel sq"></span><div style="flex:1"><span class="skel w60"></span><span class="skel w40" style="margin-top:6px;height:9px"></span></div></div></td>${'<td><span class="skel w80"></span></td>'.repeat(9)}</tr>`;
+  const tb = $('#companyTable tbody');
+  if (tb && !tb.children.length) tb.innerHTML = Array.from({ length: 10 }, row).join('');
+  const dash = $('#dashboardView');
+  if (dash && !dash.children.length) {
+    dash.innerHTML = `<div class="page-head"><div style="width:280px"><span class="skel" style="height:28px;width:200px"></span><span class="skel w60" style="margin-top:10px"></span></div></div>
+      <div class="kpis">${'<div class="kpi"><span class="skel w60" style="height:9px"></span><span class="skel w40" style="height:26px;margin-top:10px"></span></div>'.repeat(6)}</div>
+      <div class="dash-grid">${'<div class="card"><span class="skel w40" style="height:14px"></span><span class="skel w80" style="margin-top:16px"></span><span class="skel w60" style="margin-top:10px"></span><span class="skel w80" style="margin-top:10px"></span></div>'.repeat(2)}</div>`;
+  }
+}
+
 // Collapsible sidebar (remembered in this browser).
 const NAV_KEY = 'mna-crm-nav-collapsed';
 function setCollapsed(on) {

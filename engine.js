@@ -947,6 +947,20 @@ const Engine = (() => {
     return [score, `Bought ${bestDeal.target}${y ? ` (${y})` : ''}${bestNiche ? ` – ${bestNiche}` : ''}${relevant > 1 ? ` · ${relevant - 1} more similar deal${relevant > 2 ? 's' : ''}` : ''}`];
   }
 
+  // The buyer's deals that matter for this target, most relevant first, then newest (for the buyer list's "Acquisitions" column).
+  function relevantDeals(deal, cand, n = 3) {
+    const list = cand.acquisitions || [];
+    if (!list.length) return [];
+    const ap = appetiteOf(deal);
+    const out = [];
+    for (const a of list) {
+      const niche = Taxonomy.ofDeal(a)?.niche || '';
+      let rel = niche && ap.topNiches.includes(niche) ? 1 : ap.re && ap.re.test(dealText(a)) ? 0.8 : niche && ap.topNiches.some(t => Taxonomy.adjacent(t, niche)) ? 0.5 : 0;
+      out.push({ a, rel, niche, year: dealYear(a) || 0 });
+    }
+    return out.sort((x, y) => y.rel - x.rel || y.year - x.year).slice(0, n);
+  }
+
   // Serial acquirers and PE-backed platforms (add-on buyers) are more likely to buy.
   function appetiteScore(cand, deal) {
     const acq = (cand.acquisitions || []).length;
@@ -1030,7 +1044,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, nichesOf, warm, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, nichesOf, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;
