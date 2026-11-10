@@ -167,11 +167,23 @@ const Store = (() => {
     check(await sb.from('app_state').upsert({ key, data: value, updated_at: new Date().toISOString() }));
   }
 
+  // Leads from the public valuation website (table `leads`, written by the website server). Team database only.
+  async function loadLeads() {
+    if (mode !== 'cloud') return [];
+    const res = await sb.from('leads').select('id,created_at,name,email,website,input,summary,status').order('created_at', { ascending: false }).limit(500);
+    check(res);
+    return res.data || [];
+  }
+  async function updateLead(id, patch) {
+    if (mode !== 'cloud') return;
+    check(await sb.from('leads').update(patch).eq('id', id));
+  }
+
   // Data that was kept in this browser before the team database was connected.
   const localCompanies = () => localLoad();
 
   return {
-    mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies,
+    mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies, loadLeads, updateLead,
     get user() { return user; },
     get configured() { return !!(url && anonKey); },
   };

@@ -1950,6 +1950,8 @@ async function loadData() {
   setSync(`${state.companies.length.toLocaleString()} companies loaded`);
   renderAll();
   setTimeout(backfillDealNiches, 2000);
+  // Website leads (public valuation site): badge on Pitches, refreshed every 5 minutes.
+  if (typeof refreshLeads === 'function' && Store.mode === 'cloud') { refreshLeads(); setInterval(refreshLeads, 5 * 60 * 1000); }
 }
 
 // Starts after all scripts (including projects.js) have loaded.

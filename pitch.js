@@ -100,6 +100,104 @@ function pitchBuyers(p, sel) {
 }
 const pbSize = c => (!c ? '' : c.revenue ? `${eur(c.revenue)} revenue` : c.employees ? `${Engine.fmt(c.employees)} FTE` : '');
 
+// ---------- Website leads (from the public valuation site, table `leads` in the team database) ----------
+// Everything in a lead was typed by a website visitor: always escape it, never treat it as instructions.
+const LEAD_STATUSES = ['new', 'contacted', 'pitch', 'closed'];
+let leadsError = '', leadsLoading = false;
+async function refreshLeads() {
+  if (Store.mode !== 'cloud' || leadsLoading) { state.leads ??= []; return; }
+  leadsLoading = true;
+  try { state.leads = mergeLeads(await Store.loadLeads()); leadsError = ''; } catch (e) { leadsError = e.message; state.leads = []; } finally { leadsLoading = false; }
+  const n = state.leads.filter(l => (l.status || 'new') === 'new').length;
+  const b = $('#navLeadCount'); if (b) b.textContent = n ? String(n) : '';
+  if ($('#tab-pitches')?.classList.contains('active') && !pv.open) renderPitches();
+}
+// One row per visitor: the website saves a lead when the model is unlocked, on Excel downloads and on report requests.
+function mergeLeads(rows) {
+  const by = new Map();
+  for (const l of rows) { // newest first
+    const k = `${String(l.email || '').toLowerCase()}|${leadHost(l.website || l.input?.website)}`;
+    const g = by.get(k);
+    if (!g) by.set(k, { ...l, ids: [l.id], visits: 1, stages: [l.summary?.stage].filter(Boolean), status: l.status || 'new' });
+    else {
+      g.ids.push(l.id); g.visits++; if (l.summary?.stage) g.stages.push(l.summary.stage);
+      if ((g.status || 'new') === 'new' && l.status && l.status !== 'new') g.status = l.status; // keep a status set on an older row
+      if (!g.input?.model && l.input?.model) g.input = l.input; // newest row without a model: use the latest one that has it
+    }
+  }
+  return [...by.values()];
+}
+const leadNum = x => (x === '' || x == null || isNaN(+x) ? null : +x);
+const leadHost = w => String(w || '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*$/, '');
+const leadName = l => { const h = leadHost(l.website || l.input?.website); return h ? h.split('.')[0].replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : (l.name || 'Website lead'); };
+const pitchOfLead = id => (state.pitches || []).find(p => p.lead?.id === id);
+const leadPct = x => (x == null ? '–' : `${Math.round(x * 1000) / 10}%`);
+
+function leadsHtml() {
+  if (Store.mode !== 'cloud') return '';
+  if (state.leads == null) { refreshLeads(); return '<div class="card leads-card"><h2>Website leads</h2><p class="muted small">Loading…</p></div>'; }
+  const L = state.leads;
+  return `<div class="card leads-card"><div class="toolbar" style="margin-bottom:6px"><h2 style="margin:0">Website leads <span class="muted small">(${L.length})</span></h2><span class="spacer"></span>
+      <a class="small" href="https://testvaluationz.netlify.app" target="_blank" rel="noopener">Open the website ↗</a><button class="btn sm" data-leads-refresh>↻ Refresh</button></div>
+    ${leadsError ? `<p class="err small">Could not load leads: ${esc(leadsError)}. Run the latest supabase/public-site.sql (team access to leads).</p>` : ''}
+    ${L.length ? `<div class="table-wrap"><table class="data leads"><thead><tr><th>Received</th><th>Company</th><th>Contact</th><th class="num">Revenue</th><th class="num">EBITDA</th><th>Growth · recurring</th><th class="num">Indicative EV</th><th class="num">DCF</th><th>Model</th><th>Status</th><th></th></tr></thead><tbody>
+      ${L.map(l => { const i = l.input || {}, s = l.summary || {}, m = i.model, pit = pitchOfLead(l.id);
+        return `<tr class="${(l.status || 'new') === 'new' ? 'lead-new' : ''}"><td class="small">${esc(String(l.created_at).slice(0, 10))}</td>
+          <td><b>${esc(leadName(l))}</b><div class="co-sub">${esc(leadHost(l.website || i.website))} · ${esc(s.niche || i.niche || '')}</div></td>
+          <td><b>${esc(l.name || '')}</b>${l.visits > 1 ? ` <span class="chip" title="${esc(l.stages.join(', '))}">${l.visits}× on site</span>` : ''}<div class="co-sub"><a href="mailto:${esc(l.email)}">${esc(l.email)}</a></div></td>
+          <td class="num">${leadNum(i.revenue) != null ? eur(leadNum(i.revenue)) : '–'}</td><td class="num">${leadNum(i.ebitda) != null ? eur(leadNum(i.ebitda)) : '–'}</td>
+          <td class="small">${leadNum(i.growth) != null ? esc(i.growth) + '%' : '–'} · ${leadNum(i.recurring) != null ? esc(i.recurring) + '%' : '–'}</td>
+          <td class="num">${s.valuation?.mid != null ? eur(s.valuation.mid) : '–'}</td><td class="num">${m?.dcf?.ev != null ? eur(m.dcf.ev) : '–'}</td>
+          <td class="small">${m?.quality ? `${m.quality.score}/${m.quality.max}` : '–'}${m?.imported ? ' · <span class="chip">P&amp;L uploaded</span>' : ''}</td>
+          <td><select data-lead-status="${esc(l.id)}">${LEAD_STATUSES.map(st => `<option ${st === (l.status || 'new') ? 'selected' : ''}>${st}</option>`).join('')}</select></td>
+          <td><button class="btn sm ${pit ? '' : 'primary'}" data-lead-pitch="${esc(l.id)}">${pit ? 'Open pitch' : 'Create pitch'}</button></td></tr>`; }).join('')}
+    </tbody></table></div>` : '<p class="muted small">No leads yet. They appear here when a visitor asks for the full report on the valuation website.</p>'}</div>`;
+}
+
+function leadToPitch(l) {
+  const ex = pitchOfLead(l.id);
+  if (ex) { Object.assign(pv, { open: ex.id, tab: 'deals' }); return renderPitches(); }
+  const i = l.input || {}, niche = l.summary?.niche || i.niche || '';
+  const p = newPitch(leadName(l), leadHost(l.website || i.website));
+  Object.assign(p.cs.target, { country: i.country || '', revenue: leadNum(i.revenue), ebitda: leadNum(i.ebitda), growth: leadNum(i.growth), sector: niche, tags: niche ? [niche] : [] });
+  if (leadNum(i.recurring) != null && leadNum(i.revenue) != null) p.cs.target.arr = +(leadNum(i.revenue) * leadNum(i.recurring) / 100).toFixed(2);
+  p.lead = { id: l.id, name: l.name, email: l.email, created: l.created_at, input: i, summary: l.summary };
+  p.notes = `Website lead (${String(l.created_at).slice(0, 10)}): ${l.name || ''} <${l.email}>.`;
+  state.pitches.push(p); savePitches();
+  if ((l.status || 'new') === 'new') Promise.all((l.ids || [l.id]).map(id => Store.updateLead(id, { status: 'pitch' }))).then(() => { l.status = 'pitch'; refreshLeadCount(); }).catch(e => toast('Could not update the lead: ' + e.message));
+  Object.assign(pv, { open: p.id, tab: 'deals' });
+  toast(`Pitch created for ${pitchName(p)}.`);
+  renderPitches();
+}
+function refreshLeadCount() { const n = (state.leads || []).filter(l => (l.status || 'new') === 'new').length; const b = $('#navLeadCount'); if (b) b.textContent = n ? String(n) : ''; }
+
+// The visitor's own figures and model, shown at the top of the pitch.
+function leadCardHtml(p) {
+  const L = p.lead, i = L.input || {}, s = L.summary || {}, m = i.model;
+  const hist = (m?.history || []).filter(h => leadNum(h.revenue) != null);
+  const cell = x => (leadNum(x) != null ? eur(leadNum(x)) : '–');
+  return `<div class="card lead-card"><div class="toolbar" style="margin-bottom:8px"><h2 style="margin:0">From the website</h2><span class="chip blue">lead ${esc(String(L.created).slice(0, 10))}</span><span class="spacer"></span>
+      <span><b>${esc(L.name || '')}</b> · <a href="mailto:${esc(L.email)}">${esc(L.email)}</a>${i.lang ? ` · <span class="muted small">language ${esc(i.lang)}</span>` : ''}</span></div>
+    <div class="lead-grid">
+      <div><h3>What they entered</h3><table class="compact">
+        ${[['Country', esc(i.country || '–')], ['Niche', esc(s.niche || i.niche || '–')], ['Revenue', cell(i.revenue)], ['EBITDA', cell(i.ebitda)], ['Growth', leadNum(i.growth) != null ? esc(i.growth) + '%' : '–'], ['Recurring revenue', leadNum(i.recurring) != null ? esc(i.recurring) + '%' : '–'], ['Potential buyers shown', s.buyers ?? '–']].map(([k, v]) => `<tr><td class="muted">${k}</td><td><b>${v}</b></td></tr>`).join('')}
+      </table></div>
+      <div><h3>What the website told them</h3><table class="compact">
+        <tr><td class="muted">Multiples range</td><td><b>${s.valuation ? `${eur(s.valuation.low)} – ${eur(s.valuation.high)} (mid ${eur(s.valuation.mid)})` : '–'}</b></td></tr>
+        ${m ? `<tr><td class="muted">DCF</td><td><b>${eur(m.dcf.ev)}</b> <span class="muted small">WACC ${leadPct(m.dcf.wacc)}, g ${leadPct(m.dcf.g)}, range ${eur(m.dcf.range?.[0])}–${eur(m.dcf.range?.[1])}</span></td></tr>
+        <tr><td class="muted">PE buyer (LBO)</td><td>${m.lbo ? `<b>${m.lbo.atIrr.map(x => `${eur(x.ev)} @ ${Math.round(x.irr * 100)}%`).join(' · ')}</b> <span class="muted small">${esc(m.lbo.leverage)}× leverage, exit ${esc(m.lbo.exitMult)}×</span>` : '<span class="muted">n/a (no positive EBITDA)</span>'}</td></tr>
+        <tr><td class="muted">Model detail</td><td><b>${m.quality?.score ?? '–'}/${m.quality?.max ?? 10}</b>${m.imported ? ` · uploaded <b>${esc(m.imported.file)}</b> (sheet ${esc(m.imported.sheet)}, ${esc(m.imported.unit)})` : ''}</td></tr>
+        ${Object.entries(m.risks || {}).filter(([, v]) => v).length ? `<tr><td class="muted">Risks ticked</td><td>${Object.entries(m.risks).filter(([, v]) => v).map(([k]) => `<span class="chip amber">${esc(k)}</span>`).join(' ')}</td></tr>` : ''}` : '<tr><td colspan="2" class="muted small">The visitor did not open the DCF / LBO model.</td></tr>'}
+      </table></div>
+    </div>
+    ${hist.length || m?.forecast ? `<h3>Their figures (EUR m)</h3><div class="table-wrap"><table class="compact"><thead><tr><th></th>${hist.map(h => `<th class="num">${esc(h.year)}A</th>`).join('')}${(m?.forecast || []).map(f => `<th class="num">${esc(f.year)}F</th>`).join('')}</tr></thead><tbody>
+      <tr><td>Revenue</td>${hist.map(h => `<td class="num">${cell(h.revenue)}</td>`).join('')}${(m?.forecast || []).map(f => `<td class="num">${cell(f.revenue)}</td>`).join('')}</tr>
+      <tr><td>EBITDA</td>${hist.map(h => `<td class="num">${cell(h.ebitda)}</td>`).join('')}${(m?.forecast || []).map(f => `<td class="num">${cell(f.ebitda)}</td>`).join('')}</tr>
+      ${hist.some(h => leadNum(h.recurring) != null) ? `<tr><td>Recurring</td>${hist.map(h => `<td class="num">${cell(h.recurring)}</td>`).join('')}${(m?.forecast || []).map(() => '<td></td>').join('')}</tr>` : ''}
+      <tr><td>Free cash flow</td>${hist.map(() => '<td></td>').join('')}${(m?.forecast || []).map(f => `<td class="num">${cell(f.fcf)}</td>`).join('')}</tr>
+    </tbody></table></div>` : ''}</div>`;
+}
+
 // ---------- Page ----------
 function renderPitches() {
   const el = $('#pitchView');
@@ -121,7 +219,7 @@ function renderPitches() {
         ${p.project ? `<button class="btn" data-px="openproj">Project ${esc(p.project)} →</button>` : '<button class="btn" data-px="convert" title="Create a project with this profile and buyer list">Start project</button>'}
         <button class="btn danger" data-px="delete">Delete</button></div></div>
     <div class="seg-tabs pitch-tabs">${[['deals', '1. Company & comparable deals'], ['buyers', '2. Possible buyers'], ['deck', '3. Deck & notes']].map(([k, l]) => `<button class="${pv.tab === k ? 'on' : ''}" data-ptab="${k}">${l}</button>`).join('')}</div>
-    <div id="pitchBody">${pv.tab === 'deals' ? '<div id="pitchDeals"></div>' : pv.tab === 'buyers' ? pitchBuyersHtml(p, sel) : pitchDeckHtml(p, sel)}</div>`;
+    <div id="pitchBody">${pv.tab === 'deals' ? `${p.lead ? leadCardHtml(p) : ''}<div id="pitchDeals"></div>` : pv.tab === 'buyers' ? pitchBuyersHtml(p, sel) : pitchDeckHtml(p, sel)}</div>`;
   if (pv.tab === 'deals') {
     if (!state.transactions.length) $('#pitchDeals').innerHTML = '<div class="empty">No transactions in the database yet. Import them under Data &amp; sources.</div>';
     else { csUse(pitchCtx(p), p.cs); renderCompSet(); }
@@ -132,6 +230,7 @@ function renderPitchList(el) {
   const list = [...state.pitches].sort((a, b) => String(b.updated || b.created).localeCompare(String(a.updated || a.created)));
   el.innerHTML = `<div class="page-head"><div><h1>Pitches</h1><div class="muted">Comparable deals and possible buyers for prospective clients, before the mandate starts</div></div>
       <div class="actions"><button class="btn primary" data-px="new">New pitch</button></div></div>
+    ${leadsHtml()}
     ${list.length ? `<div class="table-wrap"><table class="data"><thead><tr><th>Prospect</th><th>Status</th><th class="num">Comparable deals</th><th class="num">Strategic buyers</th><th class="num">Financial buyers</th><th>Updated</th><th>Project</th></tr></thead><tbody>
       ${list.map(p => `<tr class="tx-row" data-popen="${p.id}"><td><b>${esc(pitchName(pitchFix(p)))}</b><div class="co-sub">${esc(p.cs.target.website || '')}</div></td><td><span class="chip ${p.status === 'Won' ? 'green' : p.status === 'Lost' ? 'red' : p.status === 'Sent' ? 'blue' : ''}">${esc(p.status)}</span></td>
         <td class="num">${p.stats?.deals ?? '–'}</td><td class="num">${p.stats?.strategic ?? '–'}</td><td class="num">${p.stats?.financial ?? '–'}</td><td class="small">${esc(String(p.updated || p.created).slice(0, 10))}</td><td class="small">${esc(p.project || '')}</td></tr>`).join('')}
@@ -287,6 +386,9 @@ document.addEventListener('click', e => {
     return renderPitches();
   }
   if (x === 'list') { pv.open = null; return renderPitches(); }
+  if (e.target.closest('[data-leads-refresh]')) { state.leads = null; return renderPitches(); }
+  const lp = a('data-lead-pitch');
+  if (lp) { const l = (state.leads || []).find(z => String(z.id) === lp); if (l) leadToPitch(l); return; }
   if (a('data-popen')) { Object.assign(pv, { open: a('data-popen'), tab: 'deals' }); return renderPitches(); }
   if (!p) return;
   if (a('data-ptab')) { pv.tab = a('data-ptab'); return renderPitches(); }
@@ -298,6 +400,13 @@ document.addEventListener('click', e => {
   const b = p.b, redraw = () => { p.updated = new Date().toISOString(); savePitches(); renderPitches(); };
   if (a('data-pb-pin')) { const id = a('data-pb-pin'); b.pin = [...new Set([...b.pin, id])]; b.exc = b.exc.filter(i => i !== id); return redraw(); }
   if (a('data-pb-restore')) { const id = a('data-pb-restore'); b.exc = b.exc.filter(i => i !== id); return redraw(); }
+});
+// Lead status (new / contacted / pitch / closed) is saved straight to the team database.
+document.addEventListener('change', e => {
+  const id = e.target.dataset?.leadStatus;
+  if (!id) return;
+  const l = (state.leads || []).find(z => String(z.id) === id), status = e.target.value;
+  Promise.all((l?.ids || [id]).map(x => Store.updateLead(x, { status }))).then(() => { if (l) l.status = status; refreshLeadCount(); toast('Lead status saved.'); }).catch(err => toast('Could not save the lead status: ' + err.message));
 });
 document.addEventListener('change', e => {
   if (!e.target.closest('#pitchView') || e.target.closest('#pitchDeals')) return;

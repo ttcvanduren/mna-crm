@@ -36,3 +36,8 @@ drop policy if exists "team access" on public.app_state;
 create policy "team access" on public.companies for all to authenticated using (public.is_team_member()) with check (public.is_team_member());
 create policy "team access" on public.activity  for all to authenticated using (public.is_team_member()) with check (public.is_team_member());
 create policy "team access" on public.app_state for all to authenticated using (public.is_team_member()) with check (public.is_team_member());
+
+-- Newer Supabase projects don't grant table access to logged-in users automatically. The policies above still
+-- decide WHO gets in (only @33equity.eu); these grants just allow logged-in users to use the tables at all.
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.companies, public.activity, public.app_state to authenticated;

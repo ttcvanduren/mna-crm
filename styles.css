@@ -667,3 +667,12 @@ table.progress tbody tr { cursor: pointer; }
 .feed-item:last-child { border-bottom: 0; }
 button.feed-item { font: inherit; color: inherit; background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; width: 100%; border-radius: 0; }
 button.feed-item:hover { background: var(--hover); }
+/* ---------- Website leads (Pitches) ---------- */
+.leads-card { margin-bottom: 16px; border-top: 3px solid var(--gold); }
+table.leads td { vertical-align: top; }
+table.leads tr.lead-new td { background: var(--gold-soft); }
+table.leads select { padding: 4px 6px; font-size: 12.5px; }
+.lead-card { margin-bottom: 16px; border-left: 4px solid var(--gold); }
+.lead-grid { display: grid; grid-template-columns: 1fr 1.4fr; gap: 20px; }
+@media (max-width: 1000px) { .lead-grid { grid-template-columns: 1fr; } }
+.lead-card h3 { margin-top: 6px; }
