@@ -3,28 +3,29 @@ const Engine = (() => {
   // ---------- Field definitions ----------
   // `aliases` are header names (lowercased, letters/digits only) recognised on upload.
   const COMPANY_FIELDS = [
-    { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund'] },
-    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site', 'companywebsite', 'webadres'] },
+    { key: 'name', label: 'Company name', aliases: ['company', 'companyname', 'name', 'bedrijf', 'bedrijfsnaam', 'organisation', 'organization', 'account', 'investor', 'buyer', 'target', 'fund', 'spcompanyname', 'spentityname'] },
+    { key: 'website', label: 'Website', aliases: ['website', 'url', 'web', 'domain', 'site', 'companywebsite', 'webadres', 'spwebsite'] },
     { key: 'linkedin_url', label: 'LinkedIn page', aliases: ['companylinkedin', 'linkedinpage', 'linkedincompany', 'linkedincompanypage', 'companylinkedinurl'] },
     { key: 'role', label: 'Type (Strategic / Financial / Target)', aliases: ['role', 'type', 'buyertype', 'rol'] },
     { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
     { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
     { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry', 'companycountry'] },
-    { key: 'hq_city', label: 'HQ city', aliases: ['hqcity', 'companycity', 'plaats', 'stad', 'city'] },
-    { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography'] },
+    { key: 'hq_city', label: 'HQ city', aliases: ['hqcity', 'companycity', 'plaats', 'stad', 'city', 'spcity'] },
+    { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography', 'spgeography'] },
     { key: 'currency', label: 'Currency', aliases: ['currency', 'valuta', 'reportingcurrency'] },
     { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
     { key: 'ebitda', label: 'EBITDA (m)', aliases: ['ebitda'], num: true, money: true },
-    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees', 'totalemployees'], num: true },
+    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees', 'totalemployees', 'spheadcountlatest', 'headcountlatest'], num: true },
     { key: 'linkedin_employees', label: 'Employees on LinkedIn', aliases: ['linkedinemployees', 'employeesonlinkedin'], num: true },
-    { key: 'founded', label: 'Founded', aliases: ['founded', 'yearfounded', 'foundingyear', 'established', 'opgericht'] },
-    { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar', 'companytype', 'ownershiptype'] },
+    { key: 'founded', label: 'Founded', aliases: ['founded', 'yearfounded', 'foundingyear', 'established', 'opgericht', 'spdateincorporated', 'dateincorporated', 'incorporated'] },
+    { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar', 'companytype', 'ownershiptype', 'ownershipstatustype', 'ownershipstatus'] },
+    { key: 'investors', label: 'Investors', aliases: ['investors', 'currentinvestors', 'spcurrentinvestors', 'sponsors'] },
     { key: 'ticker', label: 'Ticker', aliases: ['ticker', 'exchangeticker', 'symbol'] },
-    { key: 'capiq_id', label: 'Capital IQ ID', aliases: ['capitaliqid', 'ciqid', 'spcapitaliqid', 'capiqid', 'companyid', 'spcompanyid'] },
+    { key: 'capiq_id', label: 'Capital IQ ID', aliases: ['capitaliqid', 'ciqid', 'spcapitaliqid', 'capiqid', 'companyid', 'spcompanyid', 'spentityid'] },
     { key: 'portfolio', label: 'Portfolio companies', aliases: ['portfolio', 'portfoliocompanies'] },
     { key: 'short_description', label: 'Short description', aliases: ['shortdescription', 'tagline', 'summary', 'oneliner'] },
     { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment', 'longbusinessdescription'], long: true },
-    { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services'] },
+    { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services', 'sptopictag', 'topictag', 'topictags'] },
     { key: 'target_sectors', label: 'Looking for sectors', aliases: ['targetsectors', 'interestsectors', 'acquisitionsectors', 'focussectors', 'focus', 'investmentfocus', 'lookingforsectors'] },
     { key: 'target_countries', label: 'Looking for countries', aliases: ['targetcountries', 'lookingforcountries', 'targetgeography', 'focuscountries', 'geographicfocus', 'focusgeography'] },
     { key: 'min_revenue', label: 'Min target revenue', aliases: ['minrevenue', 'mintargetrevenue', 'minsize'], num: true, money: true },
@@ -124,6 +125,7 @@ const Engine = (() => {
     const t = lower(s);
     if (!t) return '';
     if (/listed|public|nasdaq|nyse|xetra|lse|euronext|ticker|\(.*:.*\)/.test(t)) return 'Listed';
+    if (/never sponsor|not sponsor|no sponsor/.test(t)) return 'Private / founder'; // S&P "Never Sponsor-Backed"
     if (/private equity|pe[- ]backed|\bpe\b|buyout|taken private|sponsor/.test(t)) return 'PE-backed';
     if (/\bvc\b|venture/.test(t)) return 'VC-backed';
     if (/subsidiary|part of|owned by|division/.test(t)) return 'Subsidiary';
@@ -169,7 +171,7 @@ const Engine = (() => {
   const LEGAL_WORDS = new Set('bv b.v nv n.v gmbh ag sa sas sarl srl spa ltd limited plc inc incorporated llc lp llp co kg ohg se ab as oy aps bvba vof cv holding holdings group groep gruppe unternehmensgruppe the de and'.split(' '));
 
   const DEFAULT_WEIGHTS = { sector: 30, acquisitions: 25, keywords: 25, appetite: 15, geography: 10, size: 10, history: 5, role: 5 };
-  const WEIGHT_LABELS = { sector: 'Sector / niche', acquisitions: 'Relevant acquisitions', keywords: 'Keywords', appetite: 'M&A appetite', geography: 'Geography', size: 'Size fit', history: 'History with us', role: 'Buyer/target role' };
+  const WEIGHT_LABELS = { sector: 'Sector / niche', acquisitions: 'Relevant acquisitions', keywords: 'Keywords', appetite: 'M&A appetite (buyers) / for-sale likelihood (targets)', geography: 'Geography', size: 'Size fit', history: 'History with us', role: 'Buyer/target role' };
 
   const norm = s => String(s ?? '').replace(/\s+/g, ' ').trim();
   const lower = s => norm(s).toLowerCase();
@@ -185,9 +187,11 @@ const Engine = (() => {
   CONTACT_FIELDS.forEach(f => f.aliases.forEach(a => (contactAlias[a] = f.key)));
 
   // Best guess for one header, ignoring which targets are already taken.
+  // Columns of the S&P company screen that carry nothing the CRM uses.
+  const IGNORE_HEADERS = new Set(['spcompanytype', 'spcompanystatus', 'spsiccode', 'spzip', 'spaddress1', 'spphone', 'sppriorinvestors', 'spallinvestors']);
   function guessTarget(header) {
     const hk = headerKey(header);
-    if (!hk) return 'ignore';
+    if (!hk || IGNORE_HEADERS.has(hk)) return 'ignore';
     if (exactAlias[hk]) return exactAlias[hk];
     if (contactAlias[hk]) return 'contact1.' + contactAlias[hk];
     const m = hk.match(/^([a-z]+?)(\d)$/);
@@ -299,21 +303,29 @@ const Engine = (() => {
   const FIN_SELF = /\b(is|are|operates as)\s+an?\s+([\w&-]+\s+){0,3}(private equity|venture capital|growth equity|buyout|investment|asset management|family office|holding company that invests)\b/i;
   const FIN_NAME = /\w*capital\w*|\b(partners|equity|ventures?|investments?|investors?|invest|advisers|beteiligung\w*|participations?)\b/i;
   // Markers that always mean a fund or institution, even next to words like "Technology" (e.g. "Investcorp Technology Partners IV L.P.").
-  const FUND_MARK = /\b(fund|fonds|funds|private equity|pension|teachers|sovereign|investment (authority|corporation|board)|sgr|fpci|fcpi?|scr|sicav|limited partnership)\b|\bl\.?\s?l?\.?p\.?$|\b(i{1,3}|iv|vi{0,3}|ix|xi{0,3}|xiv|xvi{0,3})(,? l\.?p\.?)?$/i;
+  const FUND_MARK = /\b(fund|fonds|funds|private equity|pension|teachers|sovereign|investment (authority|corporation|board)|sgr|fpci|fcpi?|scr|sicav|limited partnership)\b|\bl\.?\s?l?\.?p\.?$|(?<!\bb[.\s]?|-)\b(i{1,3}|iv|vi{0,3}|ix|xi{0,3}|xiv|xvi{0,3})(,? l\.?p\.?)?$/i; // "(?<!b.)": "Emico B V" / "BIYU B.V" is a Dutch BV, not fund V
   const PE_FIRMS = /^(eqt|triton|hellman & friedman|hg\b|hgcapital|thoma bravo|vista equity|kkr|carlyle|blackstone|bain capital|advent international|permira|cinven|cvc\b|apax|ta associates|silver lake|warburg pincus|general atlantic|insight (venture )?partners|summit partners|francisco partners|marlin equity|accel-kkr|psg\b|main capital|nordic capital|altor|verdane|waterland|gilde|bregal|ik (partners|investment)|ardian|eurazeo|keensight|gic\b|temasek|cpp investments|canada pension|ontario teachers|abu dhabi investment|mubadala|capman|sagard|partners group|bridgepoint|inflexion|livingbridge|riverside company|the riverside company|clearlake|genstar|symphony technology group|golden gate capital|providence equity|tpg\b|investcorp|hamilton lane|montagu|equistone|hig capital|h\.i\.g\.|one equity|battery ventures|ldc\b|maven capital|mml capital|five arrows|hayfin|eurazeo|tikehau|astorg|hellman)/i;
   const OPERATING = /software|systems|technolog|solutions|digital|data|cloud|labs?\b|consult|telecom|networks|services/i;
+  const OPERATING_LABEL = /software|it consulting|internet services|systems|semiconductor|hardware|communications equipment|data processing/i;
   function guessRole(c) {
     const name = String(c.name || '');
     if (FIN_SECTOR.test([c.sector, c.subsector].join(' '))) return 'Investor';
     if (FIN_SELF.test(String(c.short_description || '') + ' ' + String(c.description || '').slice(0, 300))) return 'Investor';
     if (PE_FIRMS.test(name) || FUND_MARK.test(name)) return 'Investor';
-    if (FIN_NAME.test(name) && !OPERATING.test(name)) return 'Investor';
+    // "Agri Information Partners" with an S&P industry like "IT Consulting and Other Services" is an operating company.
+    if (FIN_NAME.test(name) && !OPERATING.test(name) && !OPERATING_LABEL.test([c.sector, c.subsector].join(' '))) return 'Investor';
+    // An operating company with no deals, not on any of our buyer lists and of a size that gets sold rather than buys
+    // is a (potential) target. Anything on a project list, with a deal or acquisitions in its notes stays a buyer.
+    if (!(c.projects || []).length && !(c.acquisitions || []).length && !c.acquisitive && !['yes', 'some'].includes(c.enrichment?.is_acquisitive) && !listAcquisitionNotes(c).length) {
+      const s = sideOf({ ...c, role: 'Buyer' }, false);
+      if (s.label === 'Likely target' && (c.linkedin_employees ?? c.employees ?? c.revenue ?? c.rev_est) != null) return 'Target';
+    }
     return 'Buyer';
   }
 
   // One investment house, many legal names: "Thoma Bravo Fund XV, L.P.", "EQT X", "Hg Saturn 1", "Vista Equity Partners Management, LLC".
   const VEHICLE_WORD = /\b(fund|fonds|scsp|sca|fpci|fcpr|fcpi|sicav|feeder|co-?invest\w*|parallel)\b/i;
-  const VEHICLE_END = /\b(i{1,3}|iv|v|vi{1,3}|ix|x|xi{1,3}|xiv|xv|xvi{1,3}|\d{1,2})\s*(,?\s*(l\.?\s?p\.?|ab|scsp|sca|ltd\.?|limited|llc|s\.?a\.?))?\.?\s*$/i;
+  const VEHICLE_END = /(?<!\bb[.\s]?)\b(i{1,3}|iv|v|vi{1,3}|ix|x|xi{1,3}|xiv|xv|xvi{1,3}|\d{1,2})\s*(,?\s*(l\.?\s?p\.?|ab|scsp|sca|ltd\.?|limited|llc|s\.?a\.?))?\.?\s*$/i;
   const isFundVehicle = name => VEHICLE_WORD.test(name || '') || VEHICLE_END.test(name || '');
   const HOUSE_CUT = new Set('fund fonds scsp sca fpci fcpr fcpi sicav feeder co coinvest coinvestment parallel management manager managers advisers advisors adviser advisor group holdings holding trust investments investment investors private mid midmarket growth discover explore origin perennial tactical infrastructure real energy credit impact evolution strategic europe european asia global international opportunities special buyout pme small saturn mercury genesis'.split(' '));
   const NUMBERISH = /^(i{1,3}|iv|v|vi{1,3}|ix|x|xi{1,3}|xiv|xv|xvi{1,3}|\d{1,3})$/;
@@ -378,6 +390,8 @@ const Engine = (() => {
         let v = f.num ? parseNumber(raw, f.money ? unitMult : 1) : clean(raw);
         // Absolute amounts (e.g. Apollo's "Annual Revenue" 12500000) in a millions column.
         if (f.money && typeof v === 'number' && v > 100000 && unitMult === 1) v = v / 1e6;
+        // Founded as a date (S&P "Date incorporated": an Excel serial or "2/1/2014") → the year.
+        if (key === 'founded' && v !== '' && v != null) { const d = typeof raw === 'number' ? parseDate(raw) : String(v); const y = d.match(/\b(18|19|20)\d{2}\b/); v = y ? y[0] : ''; }
         if (v !== '' && v != null && company[key] == null) company[key] = v;
       } else if (scope.startsWith('contact')) {
         const idx = +scope.slice(7) - 1;
@@ -400,6 +414,11 @@ const Engine = (() => {
         if (v && !EMPTYISH.test(v)) project.extra[h] = v;
       }
     });
+    // S&P ownership status: "Pending or Current Sponsor-Backed [Main Capital Partners B.V.]" → PE-backed + sponsor.
+    const sb = String(company.ownership || '').match(/sponsor-backed\s*\[([^\]]+)\]/i);
+    if (sb) { company.sponsor_name ||= sb[1].split(/;\s*/)[0].trim(); company.ownership = `PE-backed (${sb[1].trim()})`; company.ownership_src = 'provider'; }
+    else if (/^never sponsor-backed$/i.test(company.ownership || '')) { company.ownership = 'Private (never sponsor-backed)'; company.ownership_src = 'provider'; }
+    else if (/corporate investments?\s*\[/i.test(company.ownership || '')) { company.ownership = company.ownership.replace(/current or pending corporate investments?\s*\[([^\]]+)\]/i, 'Corporate investor: $1'); company.ownership_src = 'provider'; }
     company.role = normaliseRole(company.role) || (/private equity|venture capital|investment firm|family office/i.test(company.ownership || '') ? 'Investor' : '') || opts.role || '';
     if (company.linkedin_url) company.linkedin_url = cleanUrl(company.linkedin_url);
     if (company.website && !/[a-z0-9-]\.[a-z]{2,}/i.test(company.website)) delete company.website; // e.g. "Reference", "n/a"
@@ -784,15 +803,83 @@ const Engine = (() => {
     return [0, null];
   }
 
+  // ---------- Revenue for size fit: stated, else the revenue estimate (revenue.js), else ~€120k per head ----------
+  // `live` also computes an estimate on the fly (cached in revenue.js); off while loading, when the deals aren't in yet.
+  function revenueOf(c, live = true) {
+    if (!c) return null;
+    if (c.revenue > 0) return { v: +c.revenue, est: false };
+    const e = c.rev_est?.mid ?? (live && typeof RevEst !== 'undefined' ? RevEst.cached(c)?.mid : null);
+    if (e > 0) return { v: e, est: true };
+    const emp = c.linkedin_employees ?? c.employees;
+    return emp > 0 ? { v: emp * 0.12, est: true, rough: true } : null;
+  }
+  const revText = r => `${r.est ? '≈ ' : ''}€${fmt(r.v)}m${r.est ? ' (est.)' : ''}`;
+
+  // ---------- Buyer or target? ----------
+  // Two likelihoods (0–1) per company: how likely it is to BUY (deal history, stated appetite, size, owner) and how
+  // likely it is to be SOLD (size in the M&A sweet spot, founder / long-held PE ownership, operating company, few deals).
+  // A 25-person founder-owned software company with no deals scores high as target and low as buyer; a PE-backed
+  // platform with 12 add-ons the other way round. Cached per company until its facts change.
+  const sideCache = new WeakMap();
+  function sideOf(c, live = true) {
+    const n = (c.acquisitions || []).length, rev = revenueOf(c, live), emp = c.linkedin_employees ?? c.employees ?? null;
+    const sig = [n, rev?.v, emp, c.ownership, c.role, c.sponsor_since, c.acquisitive, c.enrichment?.is_acquisitive, c.investor_type, c.founded, c.parent_name].join('|');
+    const hit = sideCache.get(c);
+    if (hit && hit.sig === sig) return hit.v;
+    const own = ownershipType(c.ownership), said = c.acquisitive || c.enrichment?.is_acquisitive;
+    const investor = c.role === 'Investor' || ['buyout', 'growth', 'vc', 'family_office', 'search_fund', 'corporate_vc'].includes(c.investor_type);
+    const year = new Date().getFullYear(), r = rev?.v ?? null;
+    const why = { buyer: [], target: [] };
+    // Buyer likelihood.
+    let buyer;
+    if (investor) { buyer = 0.95; why.buyer.push('investor'); }
+    else {
+      buyer = n >= 5 ? 0.95 : n >= 3 ? 0.85 : n >= 1 ? 0.6 : said === 'yes' ? 0.8 : said === 'some' ? 0.6 : 0.2;
+      why.buyer.push(n ? `${n} acquisition${n > 1 ? 's' : ''}` : said === 'yes' || said === 'some' ? 'acquisitive (research)' : 'no acquisitions on record');
+      if (!n && listAcquisitionNotes(c).length) { buyer = Math.max(buyer, 0.6); why.buyer.push('acquisitions in your notes'); }
+      if ((r != null && r >= 100) || emp >= 1000) { buyer += 0.25; why.buyer.push('large'); }
+      else if ((r != null && r >= 25) || emp >= 250) { buyer += 0.15; why.buyer.push('mid-sized'); }
+      else if ((r != null && r < 5) || (emp != null && emp < 50)) { buyer -= 0.1; why.buyer.push('small'); }
+      if (own === 'PE-backed' || c.sponsor_name) { buyer += 0.15; why.buyer.push('PE-backed (add-on buyer)'); }
+      if (own === 'Listed' || c.ticker) { buyer += 0.2; why.buyer.push('listed'); }
+    }
+    // Target likelihood.
+    let target;
+    if (investor) { target = 0.02; why.target.push('investor'); }
+    else {
+      target = r == null ? 0.5 : r < 0.5 ? 0.25 : r < 2 ? 0.6 : r <= 75 ? 1 : r <= 250 ? 0.6 : 0.25;
+      if (r != null) why.target.push(`revenue ${revText(rev)}`);
+      if (own === 'Listed' || c.ticker) { target *= 0.25; why.target.push('listed'); }
+      else if (own === 'Subsidiary' || c.parent_name) { target *= 0.45; why.target.push(`part of ${c.parent_name || 'a group'} (carve-out only)`); }
+      else if (own === 'PE-backed' || c.sponsor_name) {
+        const since = +String(c.sponsor_since || '').slice(0, 4), held = since > 1900 ? year - since : null;
+        target *= held != null && held >= 4 ? 0.95 : held != null ? 0.6 : 0.75;
+        why.target.push(held != null ? `PE-owned ${held} yrs${held >= 4 ? ' (exit window)' : ''}` : 'PE-backed');
+      } else if (own === 'VC-backed') { target *= 0.8; why.target.push('VC-backed'); }
+      else if (own === 'Private / founder') {
+        const age = +String(c.founded || '').slice(0, 4) > 1800 ? year - +String(c.founded).slice(0, 4) : null;
+        why.target.push(age != null && age >= 15 ? `founder / private, ${age} yrs old (succession)` : 'founder / private');
+        if (age != null && age >= 15) target = Math.min(1, target * 1.05);
+      }
+      if (n >= 10) { target *= 0.6; why.target.push(`${n} acquisitions (consolidator)`); } else if (n >= 3) { target *= 0.8; why.target.push(`${n} acquisitions`); }
+    }
+    const v = { buyer: Math.max(0.02, Math.min(1, buyer)), target: Math.max(0.02, Math.min(1, target)), why };
+    v.label = v.target >= 0.6 && v.target > v.buyer + 0.15 ? 'Likely target' : v.buyer >= 0.6 && v.buyer > v.target ? 'Likely buyer' : 'Buyer or target';
+    sideCache.set(c, { sig, v });
+    return v;
+  }
+
   // Buyer-side candidate should be able to afford the deal; target-side candidate should fit the deal's size criteria.
+  // Revenue is the stated figure, else the estimate (marked ≈).
   function sizeScore(deal, cand, candIsBuyerSide) {
     const buyer = candIsBuyerSide ? cand : deal, target = candIsBuyerSide ? deal : cand;
-    const tRev = target.revenue;
+    const tR = revenueOf(target), tRev = tR?.v;
     if (tRev == null) return [0.3, null];
+    const est = tR.est ? ' (est.)' : '', approx = tR.est ? '≈ ' : '';
     const min = buyer.min_revenue, max = buyer.max_revenue;
     if (min != null || max != null) {
       const ok = (min == null || tRev >= min) && (max == null || tRev <= max);
-      if (ok) return [1, `Revenue €${fmt(tRev)}m within ${min ?? 0}–${max ?? '∞'}m criteria`];
+      if (ok) return [tR.rough ? 0.8 : 1, `Revenue ${approx}€${fmt(tRev)}m${est} within ${min ?? 0}–${max ?? '∞'}m criteria`];
       const edge = min != null && tRev < min ? tRev / min : max / tRev;
       return [Math.max(0, edge - 0.5), null];
     }
@@ -800,11 +887,11 @@ const Engine = (() => {
     const bb = buyer.buy_box;
     if (bb && (bb.ev_min != null || bb.ev_max != null)) {
       const ev = tRev * 2, lo = bb.ev_min ?? 0, hi = bb.ev_max ?? Infinity;
-      if (ev >= lo && ev <= hi) return [1, `Likely EV €${fmt(ev)}m within €${fmt(lo)}–${bb.ev_max != null ? fmt(hi) : '∞'}m buy box`];
+      if (ev >= lo && ev <= hi) return [tR.rough ? 0.8 : 1, `Likely EV ${approx}€${fmt(ev)}m${est} within €${fmt(lo)}–${bb.ev_max != null ? fmt(hi) : '∞'}m buy box`];
       const edge = ev < lo ? ev / lo : hi / ev;
       return [Math.max(0, edge - 0.5), null];
     }
-    const bRev = buyer.revenue;
+    const bR = revenueOf(buyer), bRev = bR?.v ?? null;
     // No buyer revenue: compare the target's likely EV (~2x revenue, EUR -> USD) with the deal sizes the buyer has done.
     if (bRev == null && candIsBuyerSide) {
       const ap = acquisitionProfile(cand);
@@ -816,9 +903,9 @@ const Engine = (() => {
     }
     if (bRev == null) return [0.3, null];
     if (candIsBuyerSide && cand.role === 'Investor') return [0.6, null];
-    const ratio = bRev / tRev;
-    if (ratio >= 3) return [1, `Buyer ${fmt(ratio)}× target size`];
-    if (ratio >= 1) return [0.6 + 0.2 * (ratio - 1), `Buyer ${fmt(ratio)}× target size`];
+    const ratio = bRev / tRev, any = tR.est || bR.est ? ' (est.)' : '';
+    if (ratio >= 3) return [tR.rough || bR.rough ? 0.85 : 1, `Buyer ${fmt(ratio)}× target size${any}`];
+    if (ratio >= 1) return [0.6 + 0.2 * (ratio - 1), `Buyer ${fmt(ratio)}× target size${any}`];
     return [Math.max(0, ratio - 0.3), null];
   }
 
@@ -1018,6 +1105,11 @@ const Engine = (() => {
     return [0.2, null];
   }
 
+  function targetScore(c) {
+    const s = sideOf(c);
+    return [s.target, s.target >= 0.6 ? `Likely target: ${s.why.target.slice(0, 2).join(', ')}` : null];
+  }
+
   // How seriously this buyer engaged in our earlier projects ("historical seriousness").
   function historyScore(cand, deal) {
     const others = (cand.projects || []).filter(p => p.project && p.project !== deal.project);
@@ -1049,7 +1141,8 @@ const Engine = (() => {
           size: sizeScore(deal, c, candIsBuyerSide),
           keywords: keywordScore(dealTokens, c, deal),
           role: roleScore(deal, c),
-          appetite: appetiteScore(c, deal),
+          // Buyers: appetite to buy. Targets (buy-side search): how likely they are to be for sale.
+          appetite: candIsBuyerSide ? appetiteScore(c, deal) : targetScore(c),
           history: historyScore(c, deal),
         };
         let sum = 0;
@@ -1085,7 +1178,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, nichesOf, dealPath, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, sideOf, revenueOf, nichesOf, dealPath, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

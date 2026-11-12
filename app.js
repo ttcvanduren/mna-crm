@@ -80,6 +80,8 @@ function migrate(c) {
   }
   c.projects ??= [];
   c.sources ??= [];
+  // Owners from an S&P company screen (imported before ownership_src existed) may be replaced by sourced research.
+  if (!c.ownership_src && /^(Private \(never sponsor-backed\)|Corporate investor: .*)$/.test(c.ownership || '') || (!c.ownership_src && /^PE-backed \((?!.*since)/.test(c.ownership || '') && (c.sources || []).some(s => /S&P Capital IQ - NL software/.test(s)))) c.ownership_src = 'provider';
   c._norm = Engine.normName(c.name);
   c._domain = Engine.domainOf(c.website);
   classify(c);
@@ -128,6 +130,7 @@ function backfillDealNiches() {
       const c = list[i++];
       if (isTodo(c)) { (c.acquisitions || []).forEach(a => Taxonomy.ofDeal(a)); changed.push(c); }
       Engine.warm(c); // prepares the buyer-search data for this company
+      if (state.transactions.length) RevEst.cached(c); // revenue estimate for size fit and buyer / target likelihood
     }
     if (changed.length && Store.mode === 'local') touch(...changed);
     if (i < list.length) idle(step, { timeout: 1000 }); else state.warmed = true;
@@ -232,6 +235,10 @@ function badges(c, { all = false } = {}) {
   if (own === 'PE-backed' || own === 'VC-backed') out.push(`<span class="bdg pe" title="${esc(c.ownership)}">${own}</span>`);
   else if (c.sponsor_name) out.push(`<span class="bdg pe" title="Owned by ${esc(c.sponsor_name)}${c.sponsor_since ? ' since ' + esc(c.sponsor_since) : ''}">PE-backed</span>`);
   else if (own === 'Listed' || c.ticker) out.push(`<span class="bdg pe" title="${esc(c.ownership || c.ticker || '')}">Listed${c.ticker ? ' · ' + esc(c.ticker) : ''}</span>`);
+  if (all && c.role !== 'Investor') {
+    const s = Engine.sideOf(c);
+    if (s.label === 'Likely target') out.push(`<span class="bdg tgt" title="For-sale likelihood ${Math.round(s.target * 100)} · buyer likelihood ${Math.round(s.buyer * 100)}&#10;${esc(s.why.target.join(', '))}">Likely target</span>`);
+  }
   if (all && Engine.hasEmail(c)) out.push('<span class="bdg mail" title="Has a contact with an email address">✉ Reachable</span>');
   if (all && c.projects.length) out.push(`<span class="bdg deal">In ${c.projects.length} mandate${c.projects.length > 1 ? 's' : ''}</span>`);
   return out.length ? `<span class="badge-row">${out.join('')}</span>` : '';
@@ -318,7 +325,7 @@ function filteredCompanies() {
   const { key, dir } = state.sort;
   // Default order: your project buyers first, then researched companies, then active acquirers; noise sinks to the bottom.
   const relevance = c => (c.projects.length ? 1e6 + c.projects.length * 1e4 : 0) + (c.enrichment ? 5e3 : 0) + (c.niche ? 1e3 : 0) + Math.min(500, (c.acquisitions || []).length * 10) + c.contacts.length;
-  const val = c => key === 'relevance' ? relevance(c) : key === 'employees' ? employeesOf(c) : key === 'revenue' ? c.revenue : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
+  const val = c => key === 'relevance' ? relevance(c) : key === 'employees' ? employeesOf(c) : key === 'revenue' ? (c.revenue ?? revEstOf(c)?.mid ?? null) : key === 'people' ? c.contacts.length : key === 'deals' ? (c.acquisitions || []).length : key === 'enriched' ? c.enrichment?.at || '' : String(c[key] || '').toLowerCase();
   return list.sort((a, b) => {
     const x = val(a), y = val(b);
     if (x == null || x === '') return 1;
@@ -340,17 +347,20 @@ function renderCompanies() {
     const tags = [...new Set(c.contacts.map(x => x.role_tag).filter(t => KEY_TAGS.has(t)))];
     const emails = c.contacts.filter(x => x.email).length;
     const emp = employeesOf(c);
+    const own = Engine.ownershipType(c.ownership), ownWord = own === 'Listed' || c.ticker ? `<span title="${esc(c.ticker || c.ownership || '')}">Listed</span>` : own === 'PE-backed' || c.sponsor_name ? `<span title="${esc(c.sponsor_name || c.ownership || '')}">PE-backed</span>` : own && own !== 'Other' ? esc(own === 'Private / founder' ? 'Private' : own) : '';
+    const n = (c.acquisitions || []).length, lastYear = n ? String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4) : '';
+    const mandates = (c.projects || []).filter(p => p.project);
     return `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
       <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
       <td>${companyCell(c)}</td>
-      <td>${roleChip(c.role)}</td>
+      <td>${roleChip(c.role)}${ownWord ? `<div class="cell-sub">${ownWord}</div>` : ''}</td>
       <td>${industryCell(c)}</td><td>${esc(c.country)}</td>
-      <td class="num">${emp != null ? Engine.fmt(emp) + (c.linkedin_employees != null ? ' <span class="muted small">in</span>' : '') : ''}</td>
-      <td class="num">${money(c, c.revenue)}</td>
-      <td>${c.contacts.length ? `${c.contacts.length}${emails ? ` <span class="muted small">· ${emails} ✉</span>` : ''} ${tags.map(t => `<span class="tag k">${esc(tagShort(t))}</span>`).join('')}` : '<span class="muted">–</span>'}</td>
-      <td>${(c.acquisitions || []).length ? `<button class="link" data-deals="${c.id}" title="${esc(c.acquisitions.slice(0, 5).map(a => `${a.date || a.year || ''} ${a.target}${a.industry ? ' – ' + a.industry : ''}`).join('\n'))}"><b>${c.acquisitions.length}</b> <span class="muted small">last ${esc(String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4))}</span></button>` : (c.acq_checked_at ? '<span class="muted small">none</span>' : Engine.listAcquisitionNotes(c).length ? `<button class="link small" data-deals="${c.id}" title="Acquisitions mentioned in your lists (not researched yet)">📝 in notes</button>` : '<span class="muted">–</span>')}</td>
-      <td class="wrap">${projectChips(c)}</td>
-      <td>${c.enrichment ? `<span class="chip purple" title="${esc(c.enrichment.model)}">✦ ${ago(c.enrichment.at)}</span>` : state.queue?.pending?.includes(c.id) ? '<span class="chip amber">queued</span>' : '<span class="muted small">—</span>'}</td>
+      <td class="num">${emp != null ? Engine.fmt(emp) : '<span class="dash">–</span>'}</td>
+      <td class="num">${money(c, c.revenue) || revCell(c)}</td>
+      <td class="num" title="${esc(tags.length ? 'Key people: ' + tags.join(', ') : '')}">${c.contacts.length ? `${c.contacts.length}${emails ? `<div class="cell-sub">✉ ${emails}</div>` : ''}` : '<span class="dash">–</span>'}</td>
+      <td class="num">${n ? `<button class="link" data-deals="${c.id}" title="${esc(c.acquisitions.slice(0, 5).map(a => `${a.date || a.year || ''} ${a.target}${a.industry ? ' – ' + a.industry : ''}`).join('\n'))}">${n}</button>${lastYear ? `<div class="cell-sub">last ${esc(lastYear)}</div>` : ''}` : (c.acq_checked_at ? '<span class="dash" title="Researched: no deals found">0</span>' : Engine.listAcquisitionNotes(c).length ? `<button class="link small" data-deals="${c.id}" title="Acquisitions mentioned in your lists (not researched yet)">in notes</button>` : '<span class="dash">–</span>')}</td>
+      <td>${mandates.slice(0, 2).map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}" title="${esc([p.project, p.status, p.last_contact, p.responsible].filter(Boolean).join(' · '))}">${esc(p.project)}${p.status ? ` <i>${esc(Engine.boardStage(p.status))}</i>` : ''}</span>`).join('')}${mandates.length > 2 ? `<span class="cell-sub">+${mandates.length - 2}</span>` : ''}</td>
+      <td>${c.enrichment ? `<span class="res-mark" title="${esc(c.enrichment.model)}">✦</span> <span class="muted small">${ago(c.enrichment.at)}</span>` : state.queue?.pending?.includes(c.id) ? '<span class="chip amber">queued</span>' : '<span class="dash">–</span>'}</td>
     </tr>`;
   }).join('') || `<tr><td colspan="10"><div class="empty">${state.companies.length ? 'No companies match these filters.' : 'No companies yet. Click <b>Import Excel / CSV</b> to add your lists.'}</div></td></tr>`;
   $('#moreRows').innerHTML = list.length > shown.length ? `<button class="btn" id="showMore">Show more (${(list.length - shown.length).toLocaleString()} left)</button>` : '';
@@ -359,6 +369,41 @@ function renderCompanies() {
   renderFilterOptions();
   renderFilterChips(list.length);
   renderData(); // keeps the source counts current when the Data page is open
+}
+
+// ---------- Revenue estimate (revenue.js) ----------
+// The stored snapshot (c.rev_est, written by "Estimate revenue") or a live one for companies with a headcount.
+// Live estimates are memoised per render pass so sorting 4,000 rows doesn't recompute them.
+const revEstOf = c => RevEst.cached(c); // saved estimate, else a live one memoised in revenue.js
+const GRADE_TITLE = { A: 'stated figure', B: 'methods agree', C: 'fair', D: 'wide range', E: 'very rough' };
+function revCell(c) {
+  const e = revEstOf(c);
+  if (!e) return '<span class="dash">–</span>';
+  return `<span class="est" title="Estimated from ${e.methods} methods · P25–P75 ${RevEst.fmtM(e.p25)} – ${RevEst.fmtM(e.p75)} · confidence ${e.grade} (${GRADE_TITLE[e.grade]})${e.ev ? ` · indicative EV ${RevEst.fmtM(e.ev)}` : ''}">≈ ${RevEst.fmtM(e.mid)}</span><div class="cell-sub">${e.grade}</div>`;
+}
+// The card on the company page: every method side by side, the combined estimate, and the valuation routes.
+function revenueCardHtml(c) {
+  const r = RevEst.estimate(c);
+  if (!r.headcount && !r.methods.length) return `<h3>Revenue estimate</h3><p class="muted small">No headcount known: add employees (LinkedIn count or total) and the model estimates revenue from comparable deals and benchmarks.</p>`;
+  const on = k => !r.excluded.includes(k);
+  const bar = (m, max) => { const w = x => Math.max(0, Math.min(100, (x / max) * 100)); return `<div class="rbar"><div class="rng" style="left:${w(m.low)}%;width:${Math.max(1, w(m.high) - w(m.low))}%"></div><i style="left:${w(m.mid)}%"></i></div>`; };
+  const max = Math.max(...r.methods.map(m => m.high), r.est?.high80 || 0) * 1.05 || 1;
+  const rows = r.methods.map(m => `<tr class="${on(m.key) ? '' : 'off'}">
+      <td><label class="check small"><input type="checkbox" data-rev-toggle="${m.key}" ${on(m.key) ? 'checked' : ''}> <b>${esc(m.label)}</b></label><div class="muted small">${esc(m.basis)}</div></td>
+      <td class="num"><b>${RevEst.fmtM(m.mid)}</b><div class="muted small">${RevEst.fmtM(m.low)} – ${RevEst.fmtM(m.high)}</div></td>
+      <td class="rb">${bar(m, max)}</td>
+      <td class="num muted small">${m.n != null ? `n=${m.n}` : ''}${r.est?.weights?.[m.key] != null && on(m.key) ? `<div>${r.est.weights[m.key]} %</div>` : ''}</td></tr>`).join('');
+  const e = r.est, v = r.val;
+  const saved = c.rev_est?.at ? `saved ${esc(c.rev_est.at)}` : 'not saved yet';
+  return `<h3>Revenue estimate <span class="muted small" style="font-weight:400">${r.headcount ? `${Engine.fmt(r.headcount)} staff · ${esc(RevEst.bandOf(r.headcount)[2])} band` : ''}</span></h3>
+    ${e ? `<div class="rev-sum"><div class="rev-main"><span>Combined estimate</span><b>${RevEst.fmtM(e.mid)}</b><div class="muted small">P25–P75 ${RevEst.fmtM(e.p25)} – ${RevEst.fmtM(e.p75)} · 80 % range ${RevEst.fmtM(e.low80)} – ${RevEst.fmtM(e.high80)}</div></div>
+      <div class="rev-grade g${e.grade}" title="Confidence: A = stated figure, E = very rough">${e.grade}<small>${GRADE_TITLE[e.grade]}</small></div>
+      ${v ? `<div class="rev-main"><span>Indicative value (EV)</span><b>${RevEst.fmtM(v.mid)}</b><div class="muted small">${RevEst.fmtM(v.low)} – ${RevEst.fmtM(v.high)}</div></div>` : ''}
+      <div class="rev-act"><button class="btn sm primary" data-act="estimate" title="Stores this estimate on the company (lists, exports and the match engine use it)">${c.rev_est ? '↻ Update estimate' : 'Save estimate'}</button><div class="muted small">${saved}</div></div></div>` : ''}
+    <table class="compact rev-table"><thead><tr><th>Method</th><th class="num">Estimate</th><th>Range</th><th class="num">Weight</th></tr></thead><tbody>${rows}</tbody></table>
+    <p class="muted small">Untick a method to leave it out; the combination is a weighted geometric mean, the range pools each method's spread and their disagreement. Stated / filed / ARR figures outweigh headcount methods. Revenue per employee comes from ${RevEst.benchmarks().pairs.toLocaleString()} deals with both revenue and headcount in your transactions, the companies in the database with known revenue, and public benchmarks (Eurostat SBS, SaaS surveys).</p>
+    ${v ? `<details class="small" style="margin-top:6px"><summary><b>Valuation routes</b> <span class="muted">(${v.methods.length})</span></summary><table class="compact"><tbody>${v.methods.map(m => `<tr><td><b>${esc(m.label)}</b><div class="muted small">${esc(m.basis)}</div></td><td class="num"><b>${RevEst.fmtM(m.mid)}</b><div class="muted small">${RevEst.fmtM(m.low)} – ${RevEst.fmtM(m.high)}</div></td></tr>`).join('')}</tbody></table><p class="muted small">Small companies get a size discount on deal multiples (most deals in the database are larger). For a full valuation use Value a company.</p></details>` : ''}
+    ${c.rev_signals ? `<details class="small" style="margin-top:6px"><summary><b>Researched signals</b> <span class="muted">${esc(c.rev_signals.at || '')}</span></summary><div class="small">${Object.entries(c.rev_signals).filter(([k]) => k !== 'at').map(([k, x]) => `<div><span class="muted">${esc(k.replace(/_/g, ' '))}:</span> ${esc(String(x))}</div>`).join('')}</div></details>` : `<p class="muted small">Sharper with research: <b>✦ Export for research</b> asks Claude for published revenue, ARR, customers, pricing, open roles and web reach (<code>rev_signals</code>).</p>`}`;
 }
 
 // Industry › sector › sub-sector › niche (taxonomy.js). One select on the Companies page holds the whole tree;
@@ -400,7 +445,8 @@ const industryCell = c => {
   const p = Taxonomy.pathOfCompany(c);
   if (!p) return esc(c.sector || '');
   const main = c.niche || p.subsector || p.sector || p.industry;
-  const up = [p.industry, p.sector, p.subsector].filter(x => x && x !== main).join(' › ');
+  // Path under the main label; "Technology" is implied for software companies and only shown for other industries.
+  const up = [p.industry === 'Technology' ? '' : p.industry, p.sector, p.subsector].filter(x => x && x !== main).join(' › ');
   return `<span title="${esc([clsLine(p), c.niche_auto ? 'niche found automatically' : '', c.sector && !Taxonomy.isGeneric(c.sector) ? c.sector : ''].filter(Boolean).join(' · '))}">${esc(main)}</span><div class="muted small">${esc(up)}</div>`;
 };
 function clsFilterHtml(cur) {
@@ -447,11 +493,12 @@ FILTERS.forEach(s => $(s).addEventListener('change', () => { state.limit = 200; 
 function clearCompanyFilters() {
   FILTERS.forEach(s => { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
   $('#search').value = '';
+  $('#filterPanel').hidden = true;
 }
 
 // Quick filters (one click), chips for the active filters, and saved searches.
 const QUICK = [
-  ['Strategic', '#filterRole', 'Buyer'], ['Financial', '#filterRole', 'Investor'], ['Acquisitive', '#filterAcq', true],
+  ['Strategic', '#filterRole', 'Buyer'], ['Financial', '#filterRole', 'Investor'], ['Targets', '#filterRole', 'Target'], ['Acquisitive', '#filterAcq', true],
   ['Researched', '#filterEnriched', 'yes'], ['Reachable', '#filterEmail', true], ['In 2+ projects', '#filterMulti', true], ['★ Watched', '#filterWatch', true],
 ];
 const filterVal = el => (el.type === 'checkbox' ? el.checked : el.value);
@@ -465,10 +512,15 @@ function renderFilterChips(count) {
     if (el.type === 'checkbox' ? el.checked : el.value) active.push([s, el.type === 'checkbox' ? FILTER_NAMES[s] : el.selectedOptions[0]?.textContent || el.value]);
   }
   $('#activeFilters').innerHTML = active.length ? `<span class="muted small"><b>${count.toLocaleString()}</b> match</span>${active.map(([s, l]) => `<span class="fchip">${esc(l)}<button data-unfilter="${s}" title="Remove">×</button></span>`).join('')}<button class="link small" data-unfilter="all">Clear all</button>` : '';
+  // The Filters button shows how many of the panel's selects are set; the panel opens by itself when one is.
+  const inPanel = ['#filterRole', '#filterProject', '#filterCountry', '#filterOwnership', '#filterSize', '#filterEnriched'].filter(s => $(s).value).length;
+  const tb = $('#toggleFilters');
+  if (tb) { tb.innerHTML = `Filters${inPanel ? ` <span class="cnt">${inPanel}</span>` : ''}`; tb.classList.toggle('on', inPanel > 0); if (inPanel && !state.filterPanelTouched) $('#filterPanel').hidden = false; }
   const saved = state.savedSearches || [];
   $('#savedSearches').innerHTML = `${saved.map((s, i) => `<span class="saved-chip"><button data-saved="${i}" title="Apply this saved search">${esc(s.name)}</button><button data-unsave="${i}" title="Delete">×</button></span>`).join('')}
     ${active.length ? '<button class="btn sm" id="saveSearch">☆ Save search</button>' : ''}`;
 }
+$('#toggleFilters').addEventListener('click', () => { const p = $('#filterPanel'); p.hidden = !p.hidden; state.filterPanelTouched = true; });
 $('#tab-companies').addEventListener('click', e => {
   const q = e.target.closest('[data-quick]'), un = e.target.closest('[data-unfilter]'), sv = e.target.closest('[data-saved]'), del = e.target.closest('[data-unsave]');
   if (q) { const [, s, v] = QUICK[+q.dataset.quick], el = $(s); if (el.type === 'checkbox') el.checked = !el.checked; else el.value = el.value === v ? '' : v; }
@@ -522,6 +574,28 @@ $('#bulkDelete').addEventListener('click', async () => {
   renderCompanies();
 });
 $('#bulkEnrich').addEventListener('click', () => startResearch([...state.picked]));
+// Revenue estimates (revenue.js) stored on the companies: for the selection, or for every company with a headcount.
+async function estimateRevenue(list, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    let n = 0, skipped = 0;
+    const changed = [];
+    for (let i = 0; i < list.length; i++) {
+      const c = list[i];
+      if (c.revenue > 0 || RevEst.skip(c)) { skipped++; continue; }
+      const snap = RevEst.snapshot(c);
+      if (!snap) { skipped++; continue; }
+      if (c.rev_est?.excluded) snap.excluded = c.rev_est.excluded;
+      c.rev_est = snap; changed.push(c); n++;
+      if (changed.length >= 200) { touch(...changed.splice(0)); setSync(`Estimating… ${i + 1} / ${list.length}`); await sleep(0); }
+    }
+    if (changed.length) touch(...changed);
+    toast(`Estimated revenue for ${n.toLocaleString()} companies${skipped ? ` (${skipped.toLocaleString()} skipped: stated revenue, investors or no headcount)` : ''}. Saving…`, 7000);
+    renderCompanies(); if (state.drawer) renderDrawer();
+  } finally { if (btn) btn.disabled = false; }
+}
+$('#bulkEstimate').addEventListener('click', e => estimateRevenue([...state.picked].map(byId).filter(Boolean), e.target));
+$('#estimateAll').addEventListener('click', e => { if (confirm(`Estimate revenue for every company with a headcount (${state.companies.filter(c => RevEst.headcountOf(c) && !(c.revenue > 0)).length.toLocaleString()})? Existing estimates are refreshed; stated revenue is never touched.`)) estimateRevenue(state.companies, e.target); });
 $('#bulkPeople').addEventListener('click', () => apolloBulk([...state.picked]));
 
 // Descriptions written by Claude Code from the data in your own lists (no web research).
@@ -563,9 +637,11 @@ $('#bulkResearchExport').addEventListener('click', () => {
     linkedin_url: c.linkedin_url || '', description: String(c.description || '').slice(0, 500),
     known_people: c.contacts.map(x => [x.name, x.title].filter(Boolean).join(' – ')).filter(Boolean).slice(0, 6),
     researched_before: c.enrichment?.at?.slice(0, 10) || '',
+    employees: employeesOf(c) ?? '', founded: c.founded || '', ownership: c.ownership || '',
+    revenue_known: c.revenue > 0, revenue_estimate: c.rev_est?.mid ? `EUR ${c.rev_est.mid}m (${c.rev_est.grade})` : '',
   }));
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '');
-  downloadJson({ type: 'mna-crm-research-request', version: 1, created: new Date().toISOString(), companies }, `research-request-${stamp}.json`);
+  downloadJson({ type: 'mna-crm-research-request', version: 1, created: new Date().toISOString(), wanted: ['profile', 'people', 'acquisitions', 'rev_signals'], companies }, `research-request-${stamp}.json`);
   toast(`Exported ${companies.length} companies. Give this file to Claude Code and ask it to research them.`, 7000);
 });
 
@@ -595,6 +671,9 @@ async function importResearchFile(f) {
       // Research that confirms the type ("type: Financial" in notes) replaces a guessed type, never one you set yourself.
       const type = String(it.profile.notes || '').match(/^type:\s*(strategic|financial)/i)?.[1];
       if (type && (!c.role || c.role_auto)) { c.role = /financial/i.test(type) ? 'Investor' : 'Buyer'; c.role_auto = false; }
+      // New headcount, owner or revenue signals: refresh a saved revenue estimate (method choices are kept).
+      if (c.rev_est && !(c.revenue > 0)) { const ex = c.rev_est.excluded, snap = RevEst.snapshot(c); if (snap) { if (ex) snap.excluded = ex; c.rev_est = snap; } }
+      else if (c.rev_est && c.revenue > 0) delete c.rev_est;
       migrate(c);
       touch(c);
     }
@@ -904,6 +983,7 @@ function renderDrawer() {
         ${fact('CRM status', esc(c.status))}
       </div>
       ${buyBoxHtml(c, fact)}
+      ${!Enricher.isFinancial(c) ? `<div class="rev-card">${revenueCardHtml(c)}</div>` : ''}
       ${(c.acquisitions || []).length || c.acquisition_focus ? `<h3>What they buy ${(c.acquisitions || []).length ? `<button class="link small" data-dtab="acquisitions">all ${c.acquisitions.length} deals →</button>` : ''}</h3>${buyerProfileHtml(c, true)}` : ''}
       ${c.projects.length ? `<h3>Track record with us</h3><div class="chips">${c.projects.map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}">${esc(p.project)}: ${esc(p.status || 'Not approached')}</span>`).join('')}</div>
         ${c.projects.filter(p => p.rationale).map(p => `<p class="small"><b>Why it fits ${esc(p.project)}:</b> ${esc(p.rationale)}</p>`).join('')}` : ''}
@@ -953,8 +1033,9 @@ function renderDrawer() {
   const acqN = (c.acquisitions || []).length, emp = employeesOf(c);
   const metric = (k, v) => `<div class="metric"><span>${k}</span>${v ? `<b>${v}</b>` : '<b class="none">–</b>'}</div>`;
   const lastDeal = acqN ? String(c.acquisitions[0].date || c.acquisitions[0].year || '').slice(0, 4) : '';
+  const rev = c.revenue == null ? revEstOf(c) : null;
   const metrics = [
-    metric('Revenue', money(c, c.revenue)),
+    metric('Revenue', money(c, c.revenue) || (rev ? `<span class="est" title="Estimate · P25–P75 ${RevEst.fmtM(rev.p25)} – ${RevEst.fmtM(rev.p75)}">≈ ${RevEst.fmtM(rev.mid)}</span>` : '')),
     metric('EBITDA', money(c, c.ebitda)),
     metric('Employees', emp != null ? Engine.fmt(emp) : ''),
     ...(c.revenue > 0 && emp > 0 ? [metric('Revenue / employee', `${money(c, (c.revenue * 1000) / emp).replace(/m$/, '')}k${c.ebitda != null ? ` <span class="muted small">· EBITDA ${money(c, (c.ebitda * 1000) / emp).replace(/m$/, '')}k</span>` : ''}`)] : []),
@@ -962,6 +1043,7 @@ function renderDrawer() {
     metric('Founded', esc(c.founded || '')),
     metric('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', '))),
     metric('Ownership', esc(Engine.ownershipType(c.ownership) || '')),
+    ...(c.role === 'Investor' ? [] : [(() => { const s = Engine.sideOf(c); return `<div class="metric" title="Buyer: ${esc(s.why.buyer.join(', '))}&#10;Target: ${esc(s.why.target.join(', '))}"><span>Buyer · target</span><b>${Math.round(s.buyer * 100)} · ${Math.round(s.target * 100)}</b></div>`; })()]),
   ].join('');
   // Data completeness (like a listing's verification checklist).
   const checks = [
@@ -1047,6 +1129,26 @@ $('#drawer').addEventListener('click', e => {
     state.picked = keep;
   }
   if (act === 'match') { closeDrawer(); setDeal(id); showTab('match'); }
+  if (act === 'estimate') {
+    const c = byId(id), snap = RevEst.snapshot(c);
+    if (!snap) return toast('No estimate possible: add a headcount first.');
+    c.rev_est = snap; touch(c);
+    toast(`Saved: revenue ≈ ${RevEst.fmtM(snap.mid)} (${snap.grade}), indicative EV ${snap.ev ? RevEst.fmtM(snap.ev) : '–'}.`);
+    renderDrawer(); renderCompanies();
+  }
+});
+// Method toggles in the revenue card: the choice is kept with the saved estimate.
+$('#drawer').addEventListener('change', e => {
+  const k = e.target.dataset?.revToggle;
+  if (!k || !state.drawer) return;
+  const c = byId(state.drawer.id);
+  const ex = new Set(c.rev_est?.excluded || []);
+  if (e.target.checked) ex.delete(k); else ex.add(k);
+  c.rev_est = { ...(c.rev_est || {}), excluded: [...ex] };
+  const snap = RevEst.snapshot(c);
+  if (snap) c.rev_est = snap; else delete c.rev_est;
+  touch(c);
+  renderDrawer();
 });
 
 // ---------- Claude research queue ----------
@@ -1176,7 +1278,8 @@ function readSheet(ws, name) {
 }
 
 function prepSheet(file, sh, resetMapping, idx = Engine.buildIndex(state.companies)) {
-  sh.headers = (sh.rows[sh.headerRow] || []).map(norm);
+  // A blank header cell takes the label written just above it (S&P screens put "Ownership Status Type" a row higher).
+  sh.headers = (sh.rows[sh.headerRow] || []).map((h, i) => norm(h) || norm((sh.rows[sh.headerRow - 1] || [])[i]) || norm((sh.rows[sh.headerRow - 2] || [])[i]));
   if (resetMapping || !sh.targets) sh.targets = Engine.mapHeaders(sh.headers, state.mappingMemory);
   const source = `${file.name} › ${sh.name}`;
   const firstByName = new Map();
@@ -1991,6 +2094,8 @@ function flatten(c) {
   });
   row.Acquisitions = (c.acquisitions || []).map(a => `${a.target}${a.date || a.year ? ` (${a.date || a.year})` : ''}${a.industry ? ` – ${a.industry}` : ''}${a.deal_value ? `, ${a.deal_value}` : ''}`).join('; ');
   row['# Acquisitions'] = (c.acquisitions || []).length;
+  const e = c.revenue > 0 ? null : c.rev_est;
+  Object.assign(row, { 'Revenue estimate (EUR m)': e?.mid ?? '', 'Estimate P25': e?.p25 ?? '', 'Estimate P75': e?.p75 ?? '', 'Estimate confidence': e?.grade ?? '', 'Indicative EV (EUR m)': e?.ev ?? '', 'EV low': e?.ev_low ?? '', 'EV high': e?.ev_high ?? '' });
   row.Projects = c.projects.map(p => [p.project, p.status].filter(Boolean).join(': ')).join(' | ');
   row.Sources = c.sources.join('; ');
   row['Researched by Claude'] = c.enrichment ? c.enrichment.at.slice(0, 10) : '';

@@ -6,7 +6,9 @@ const Store = (() => {
   const anonKey = cfg.supabaseAnonKey || localStorage.getItem('crm.supabaseAnonKey') || '';
   const domain = (cfg.allowedEmailDomain || '33equity.eu').toLowerCase();
   let sb = null, user = null;
-  const mode = url && anonKey && window.supabase ? 'cloud' : 'local';
+  // Testing: localStorage 'crm.forceLocal' = '1' keeps a browser on its own IndexedDB even when config.js has the team keys.
+  const forceLocal = (() => { try { return localStorage.getItem('crm.forceLocal') === '1'; } catch { return false; } })();
+  const mode = url && anonKey && window.supabase && !forceLocal ? 'cloud' : 'local';
 
   // ---------- Browser storage ----------
   // Version 2: companies are stored one record per company (store "companies"), so saving one change writes

@@ -165,15 +165,14 @@ function renderProjectDetail(name) {
 }
 
 // Name cell with direct links, shared by the company list and project pages.
+// Name cell: logo, name and one line of description. Website and LinkedIn appear as small icons when the row is
+// hovered (like Attio / OffDeal), so the name line stays clean. Badges live on the company page and buyer lists.
 function companyCell(c) {
-  const sub = c.short_description || [c.sector, c.country].filter(Boolean).join(' · ');
+  const sub = c.short_description || [c.niche || (Taxonomy.isGeneric(c.sector) ? '' : c.sector), c.country].filter(Boolean).join(' · ');
   const site = c.website ? Engine.cleanUrl(c.website) : '';
-  return `<div class="co">${logo(c)}<div style="min-width:0">
-    <div class="co-line"><span class="co-name">${esc(c.name)}</span>
-      ${site ? `<a class="ext" href="${esc(site)}" target="_blank" rel="noopener" title="Open ${esc(c._domain || site)}">↗ ${esc(c._domain || 'website')}</a>` : ''}
-      ${c.linkedin_url ? `<a class="ext li" href="${esc(c.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}
-      ${badges(c)}
-    </div>
+  return `<div class="co">${logo(c)}<div class="co-body">
+    <div class="co-line"><span class="co-name">${esc(c.name)}</span>${c.watched ? '<span class="co-star" title="On your watchlist">★</span>' : ''}
+      <span class="co-links">${site ? `<a class="co-link" href="${esc(site)}" target="_blank" rel="noopener" title="${esc(c._domain || site)}">↗</a>` : ''}${c.linkedin_url ? `<a class="co-link li" href="${esc(c.linkedin_url)}" target="_blank" rel="noopener" title="LinkedIn">in</a>` : ''}</span></div>
     <div class="co-sub" title="${esc(sub)}">${esc(sub)}</div></div></div>`;
 }
 

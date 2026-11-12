@@ -86,27 +86,30 @@
           </div>
         </div>
 
-        <div class="filters">
+        <div class="toolbar-row">
           <input type="search" id="search" placeholder="Search companies, people, emails, descriptions…">
-          <select id="filterRole"><option value="">All roles</option></select>
-          <select id="filterProject"><option value="">All projects</option></select>
-          <select id="filterCountry"><option value="">All countries</option></select>
-          <select id="filterSector"><option value="">All industries</option></select>
-          <select id="filterOwnership"><option value="">Any ownership</option></select>
-          <select id="filterSize">
+          <select id="filterSector" class="wide"><option value="">All industries</option></select>
+          <button class="btn" id="toggleFilters" type="button">Filters</button>
+          <span hidden><input type="checkbox" id="filterEmail"><input type="checkbox" id="filterMulti"><input type="checkbox" id="filterAcq"><input type="checkbox" id="filterWatch"></span>
+        </div>
+        <div class="filter-panel" id="filterPanel" hidden>
+          <label>Type<select id="filterRole"><option value="">All roles</option></select></label>
+          <label>Mandate<select id="filterProject"><option value="">All projects</option></select></label>
+          <label>Country<select id="filterCountry"><option value="">All countries</option></select></label>
+          <label>Ownership<select id="filterOwnership"><option value="">Any ownership</option></select></label>
+          <label>Size<select id="filterSize">
             <option value="">Any size</option>
             <option value="0-50">&lt; 50 employees</option>
             <option value="50-250">50–250</option>
             <option value="250-1000">250–1,000</option>
             <option value="1000-5000">1,000–5,000</option>
             <option value="5000-">5,000+</option>
-          </select>
-          <select id="filterEnriched">
+          </select></label>
+          <label>Research<select id="filterEnriched">
             <option value="">Any research status</option>
             <option value="yes">Researched by Claude</option>
             <option value="no">Not researched yet</option>
-          </select>
-          <span hidden><input type="checkbox" id="filterEmail"><input type="checkbox" id="filterMulti"><input type="checkbox" id="filterAcq"><input type="checkbox" id="filterWatch"></span>
+          </select></label>
         </div>
         <div class="quick-row">
           <div id="quickFilters" class="pills"></div>
@@ -121,6 +124,7 @@
           <button class="btn primary" id="bulkResearchExport" title="Download a file to research in Claude Code (uses your subscription)">✦ Export for research</button>
           <button class="btn" id="bulkPeople" title="Find CEO / CFO / Corp Dev / M&A people with Apollo">👤 Find people (Apollo)</button>
           <button class="btn" id="bulkEnrich" title="Research directly via the Anthropic API (paid per company)">Research via API</button>
+          <button class="btn" id="bulkEstimate" title="Estimate revenue and an indicative value from headcount, comparable deals and benchmarks (free, no web)">≈ Estimate revenue</button>
           <button class="btn" id="bulkExport">Export</button>
           <button class="btn danger" id="bulkDelete">Delete</button>
           <button class="btn ghost" id="bulkClear">Clear selection</button>
@@ -131,14 +135,14 @@
             <thead><tr>
               <th class="cb"><input type="checkbox" id="checkAllCompanies"></th>
               <th data-sort="name">Company</th>
-              <th data-sort="role">Role</th>
-              <th data-sort="niche">Industry / niche</th>
+              <th data-sort="role">Type</th>
+              <th data-sort="niche">Sector</th>
               <th data-sort="country">Country</th>
               <th data-sort="employees" class="num">Employees</th>
-              <th data-sort="revenue" class="num">Revenue</th>
-              <th data-sort="people">People</th>
-              <th data-sort="deals" title="Acquisitions / investments recorded">Deals</th>
-              <th>Projects</th>
+              <th data-sort="revenue" class="num" title="Stated revenue, or ≈ an estimate from headcount, comparable deals and benchmarks">Revenue</th>
+              <th data-sort="people" class="num">Contacts</th>
+              <th data-sort="deals" class="num" title="Acquisitions / investments recorded">Deals</th>
+              <th>Mandates</th>
               <th data-sort="enriched">Research</th>
             </tr></thead>
             <tbody></tbody>
@@ -260,7 +264,8 @@
             <h2><span class="step">3</span> Research (Claude)</h2>
             <p class="muted small">Select companies on the Companies page → <b>✦ Export for research</b>, let Claude Code research the file, then import the results here (profiles, people, acquisitions, descriptions, industry &amp; niche).</p>
             <div class="toolbar"><label class="btn primary">✦ Import research<input type="file" id="importResearch" accept=".json" multiple hidden></label>
-              <button class="btn" id="fillOwnData" title="Free, no web: founding year, HQ city, parent and former names from the Capital IQ descriptions, and PE owners from the deal history">Fill in from own data</button></div>
+              <button class="btn" id="fillOwnData" title="Free, no web: founding year, HQ city, parent and former names from the Capital IQ descriptions, and PE owners from the deal history">Fill in from own data</button>
+              <button class="btn" id="estimateAll" title="Free, no web: revenue and indicative value for every company with a headcount, from comparable deals, companies with known revenue and external benchmarks (revenue.js)">≈ Estimate revenue for all</button></div>
             <div id="dataResearch" class="muted small"></div>
           </div>
           <div class="card">
@@ -279,6 +284,7 @@
               <button class="btn primary" id="backup">Download backup</button>
               <label class="btn">Restore backup<input type="file" id="restore" accept=".json" hidden></label>
               <button class="btn" id="exportAll">Export all companies (Excel)</button>
+              <button class="btn" id="downloadDatasets" title="One Excel workbook: companies with buyer / target scores and revenue estimates, targets, buyers, people, buyer deals, transactions, revenue per employee">Download datasets</button>
             </div>
           </div>
           <div class="card">
@@ -397,6 +403,8 @@
   <script src="process.js"></script>
   <script src="connectors.js"></script>
   <script src="valuation.js"></script>
+  <script src="revenue.js"></script>
+  <script src="datasets.js"></script>
   <script src="compset.js"></script>
   <script src="pitch.js"></script>
   <script src="datahub.js"></script>

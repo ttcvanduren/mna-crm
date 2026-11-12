@@ -217,6 +217,13 @@ If the name is ambiguous, use the website and country to pick the right company,
   function applyFacts(c, p, { at = new Date().toISOString(), src = 'research', level = 0 } = {}) {
     let n = 0;
     const set = (obj, k, v) => { if (isEmpty(v) || !isEmpty(obj[k])) return; obj[k] = v; n++; };
+    // Ownership from a data provider's screen (S&P "Never Sponsor-Backed", "Sponsor-Backed [X]", marked ownership_src
+    // 'provider') is often outdated: sourced research replaces it, with the owner fields. Your own entries still win.
+    if (p.ownership && level >= 2 && c.ownership_src === 'provider') {
+      Object.assign(c, { ownership: p.ownership, sponsor_name: p.sponsor_name || '', sponsor_since: p.sponsor_name ? p.sponsor_since || '' : '', sponsor_src: src, ownership_src: src });
+      if (p.parent_name) c.parent_name = p.parent_name;
+      n++;
+    }
     for (const k of ['website', 'country', 'hq_city', 'founded', 'ownership']) set(c, k, p[k]);
     if (INVESTOR_TYPES.includes(p.investor_type)) set(c, 'investor_type', p.investor_type);
     set(c, 'parent_name', p.parent_name);
@@ -263,6 +270,14 @@ If the name is ambiguous, use the website and country to pick the right company,
     if (c.ebitda == null && num(p.ebitda) != null) { c.ebitda = num(p.ebitda); c.currency ||= 'EUR'; n++; }
     if (blank(c.acquisition_focus) && p.acquisition_focus) { c.acquisition_focus = p.acquisition_focus; n++; }
     for (const k of ['target_sectors', 'target_countries']) set(c, k, p[k]);
+    // Revenue signals (revenue.js): figures and observations that make the revenue estimate sharper. Amounts in EUR m
+    // (acv in EUR k). Newer research replaces older signals; your own numbers stay in c.revenue.
+    if (p.rev_signals && typeof p.rev_signals === 'object') {
+      const r = { ...(c.rev_signals || {}) }, before = n;
+      for (const k of ['revenue_stated', 'arr', 'customers', 'acv', 'job_openings', 'linkedin_growth_pct', 'offices', 'web_visits_month', 'funding_total', 'pricing_from']) { const v = num(p.rev_signals[k]); if (v != null) { if (r[k] !== v) n++; r[k] = v; } }
+      for (const k of ['revenue_year', 'revenue_source', 'arr_source', 'business_model', 'notes']) if (p.rev_signals[k]) { if (r[k] !== String(p.rev_signals[k])) n++; r[k] = String(p.rev_signals[k]); }
+      if (n > before) { r.at = String(at).slice(0, 10); c.rev_signals = r; delete c.rev_est; }
+    }
     if (n || level > 0) c.research = { ...(c.research || {}), level: Math.max(c.research?.level || 0, level), at, by: src };
     return n;
   }

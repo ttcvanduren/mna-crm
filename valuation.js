@@ -573,6 +573,41 @@ function yearChart(list) {
     <div class="legend small muted"><i class="sw n"></i> deals <i class="sw x"></i> median EV/Revenue (shown when ≥3 deals have one) · click a year to filter</div>`;
 }
 
+// Multiples by Industry › Sector › Sub-sector › Niche: one expandable table over the whole taxonomy. Each row shows
+// deals, deals in the last 3 years, median EV/Revenue and EV/EBITDA (with P25–P75) and the median deal size.
+// Clicking a row filters the page on that level; the chevron opens the level below. Open levels are kept in cf.tree.
+function clsTreeHtml(list) {
+  const buckets = new Map();
+  const add = (k, t) => { if (!buckets.has(k)) buckets.set(k, []); buckets.get(k).push(t); };
+  let unclassified = 0;
+  for (const t of list) {
+    const p = Taxonomy.pathOfDeal(t);
+    if (!p) { unclassified++; continue; }
+    add('I:' + p.industry, t); if (p.sector) add('S:' + p.sector, t); if (p.subsector) add('U:' + p.subsector, t); if (p.niche) add('n:' + p.niche, t);
+  }
+  const now = new Date().getFullYear();
+  const statsOf = ts => ({ n: ts.length, n3: ts.filter(t => (t.year || 0) >= now - 2).length, evr: stat(ts.map(t => t.ev_revenue).filter(x => x != null)), eve: stat(ts.map(t => t.ev_ebitda).filter(x => x != null)), size: med(ts.map(t => t.deal_value).filter(x => x > 0)) });
+  const open = cf.tree ||= new Set(['I:Technology']);
+  const max = Math.max(1, ...[...buckets].filter(([k]) => k.startsWith('I:')).map(([, v]) => v.length));
+  const m = st => (st.n >= 3 ? `<b>${mult(st.median)}</b><span class="rng" title="P25–P75, n=${st.n}">${mult(st.p25)}–${mult(st.p75)}</span>` : `<span class="muted" title="n=${st.n}">–</span>`);
+  const rows = [];
+  const walk = (key, name, depth, children) => {
+    const ts = buckets.get(key);
+    if (!ts) return;
+    const s = statsOf(ts), kids = children.filter(c => buckets.has(c.key)).sort((a, b) => buckets.get(b.key).length - buckets.get(a.key).length), isOpen = open.has(key);
+    rows.push(`<tr class="lv${depth} ${key === cf.industry ? 'on' : ''}" data-ckey="${esc(key)}">
+      <td><div class="tn" style="--d:${depth}">${kids.length ? `<button class="tw ${isOpen ? 'open' : ''}" data-ctree="${esc(key)}" title="${isOpen ? 'Collapse' : 'Expand'}"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3l5 5-5 5"/></svg></button>` : '<span class="tw"></span>'}<span class="tname">${esc(name)}</span></div>${depth === 0 ? `<div class="seg-bar"><i style="width:${Math.round((s.n / max) * 100)}%"></i></div>` : ''}</td>
+      <td class="num">${s.n.toLocaleString()}</td><td class="num muted">${s.n3.toLocaleString()}</td><td class="num mm">${m(s.evr)}</td><td class="num mm">${m(s.eve)}</td><td class="num">${usdm(s.size)}</td></tr>`);
+    if (isOpen) kids.forEach(c => walk(c.key, c.name, depth + 1, c.children));
+  };
+  const tree = Taxonomy.TREE.map(i => ({ key: 'I:' + i.industry, name: i.industry, children: i.sectors.map(s => ({ key: 'S:' + s.sector, name: s.sector, children: s.subsectors.map(u => ({ key: 'U:' + u.subsector, name: u.subsector, children: u.niches.map(n => ({ key: 'n:' + n, name: n, children: [] })) })) })) }));
+  tree.filter(i => buckets.has(i.key)).sort((a, b) => buckets.get(b.key).length - buckets.get(a.key).length).forEach(i => walk(i.key, i.name, 0, i.children));
+  return `<div class="tbl-x"><table class="compact cls-tree"><thead><tr><th>Industry › sector › sub-sector › niche</th><th class="num">Deals</th><th class="num" title="Announced in the last three years">Last 3 yrs</th><th class="num">EV / Revenue</th><th class="num">EV / EBITDA</th><th class="num">Median size</th></tr></thead><tbody>
+    ${rows.join('')}${unclassified ? `<tr class="lv0 muted"><td><div class="tn" style="--d:0"><span class="tw"></span><span class="tname">Not classified</span></div></td><td class="num">${unclassified.toLocaleString()}</td><td colspan="4" class="small">deals whose description gives no niche</td></tr>` : ''}
+  </tbody></table></div>
+  <p class="muted small">Medians over the deals in the current filter; the small figures are P25–P75. Multiples are shown from 3 deals. Click a row to filter the page on that level, the chevron to open the level below.</p>`;
+}
+
 function segTable(rows, attr, active, limit = 12) {
   const max = Math.max(...rows.map(r => r.n), 1);
   return `<table class="compact seg"><thead><tr><th></th><th class="num">Deals</th><th class="num">EV/Rev</th><th class="num">EV/EBITDA</th><th class="num">Median size</th></tr></thead><tbody>
@@ -616,8 +651,6 @@ function renderComps() {
   const sizes = list.map(t => t.deal_value).filter(x => x > 0);
   const buyers = list.flatMap(t => splitBuyers(t.buyer));
   const fin = list.filter(t => splitBuyers(t.buyer).some(b => FIN_BUYER.test(b))).length;
-  // By sub-sector (else sector) from the taxonomy instead of broad labels like "Application Software".
-  const industries = groupStats(list, t => { const p = Taxonomy.pathOfDeal(t); return p ? p.subsector || p.sector || p.industry : ''; }).sort((a, b) => b.n - a.n);
   const regions = groupStats(list, bigRegion).sort((a, b) => b.n - a.n);
   const crm = crmIndex();
   const topBuyers = [...buyers.reduce((m, b) => m.set(b, (m.get(b) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]).slice(0, 12);
@@ -628,16 +661,22 @@ function renderComps() {
 
   $('#compsView').innerHTML = `<div class="page-head"><div><h1>Transactions</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
       <div class="actions"><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn" data-goto="data" title="Import files, sources, master file">Import & sources →</button></div></div>
-    <div class="filters">
-      <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
-      <select id="cfIndustry"><option value="">All industries</option>${clsOptions}</select>
-      <select id="cfRegion"><option value="">All regions</option>${allReg.map(c => `<option ${c === cf.region ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
-      <select id="cfStatus"><option value="live" ${cf.status === 'live' ? 'selected' : ''}>Completed + pending</option><option value="done" ${cf.status === 'done' ? 'selected' : ''}>Completed only</option><option value="all" ${cf.status === 'all' ? 'selected' : ''}>Incl. terminated</option></select>
-      <label class="row-label">Years <input id="cfFrom" value="${esc(cf.from)}" placeholder="2015" style="width:58px">–<input id="cfTo" value="${esc(cf.to)}" placeholder="2026" style="width:58px"></label>
-      <label class="row-label">Deal size <input id="cfMin" value="${esc(cf.minSize)}" placeholder="min" style="width:54px">–<input id="cfMax" value="${esc(cf.maxSize)}" placeholder="max" style="width:54px"> m</label>
-      <label class="check"><input type="checkbox" id="cfMult" ${cf.withMult ? 'checked' : ''}> Only with multiples</label>
-      ${active.length ? `<button class="link small" data-vx="resetcf">Clear filters (${active.join(' · ')})</button>` : ''}
+    ${(() => { const more = [cf.region, cf.status !== 'live', cf.from, cf.to, cf.minSize, cf.maxSize, cf.withMult, cf.buyer].filter(Boolean).length; return `
+    <div class="toolbar-row">
+      <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description…" value="${esc(cf.q)}">
+      <select id="cfIndustry" class="wide"><option value="">All industries</option>${clsOptions}</select>
+      <button class="btn ${more ? 'on' : ''}" data-vx="morecf">Filters${more ? ` <span class="cnt">${more}</span>` : ''}</button>
+      ${active.length ? `<button class="link small" data-vx="resetcf">Clear</button>` : ''}
     </div>
+    <div class="filter-panel" ${cf.more || more ? '' : 'hidden'}>
+      <label>Region<select id="cfRegion"><option value="">All regions</option>${allReg.map(c => `<option ${c === cf.region ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></label>
+      <label>Status<select id="cfStatus"><option value="live" ${cf.status === 'live' ? 'selected' : ''}>Completed + pending</option><option value="done" ${cf.status === 'done' ? 'selected' : ''}>Completed only</option><option value="all" ${cf.status === 'all' ? 'selected' : ''}>Incl. terminated</option></select></label>
+      <label>Years<span class="pair"><input id="cfFrom" value="${esc(cf.from)}" placeholder="2015">–<input id="cfTo" value="${esc(cf.to)}" placeholder="${new Date().getFullYear()}"></span></label>
+      <label>Deal size (USD m)<span class="pair"><input id="cfMin" value="${esc(cf.minSize)}" placeholder="min">–<input id="cfMax" value="${esc(cf.maxSize)}" placeholder="max"></span></label>
+      <label>Buyer<input id="cfBuyer" value="${esc(cf.buyer)}" placeholder="name contains…"></label>
+      <label class="check" style="align-self:end"><input type="checkbox" id="cfMult" ${cf.withMult ? 'checked' : ''}> Only deals with multiples</label>
+    </div>
+    ${active.length ? `<div class="active-filters"><span class="muted small"><b>${list.length.toLocaleString()}</b> deals</span>${active.map(a => `<span class="fchip">${esc(a)}</span>`).join('')}</div>` : ''}`; })()}
     <div class="kpis">
       <div class="kpi"><div class="k">Deals</div><div class="v">${list.length.toLocaleString()}</div><div class="muted small">${fin ? `${Math.round((fin / Math.max(1, list.length)) * 100)}% financial buyers (by name)` : ''}</div></div>
       <div class="kpi"><div class="k">Median deal size</div><div class="v">${usdm(med(sizes))}</div><div class="muted small">P25–P75 ${usdm(percentile(sizes, 0.25))}–${usdm(percentile(sizes, 0.75))}</div></div>
@@ -646,14 +685,14 @@ function renderComps() {
       ${(() => { const pe = perEmployee(list); return pe.rev.n ? `<div class="kpi"><div class="k">Revenue / employee</div><div class="v">$${Engine.fmt(pe.rev.median)}k</div><div class="muted small">P25–P75 $${Engine.fmt(pe.rev.p25)}k–$${Engine.fmt(pe.rev.p75)}k · n=${pe.rev.n}${pe.ebitda.n >= 3 ? ` · EBITDA/employee $${Engine.fmt(pe.ebitda.median)}k` : ''}</div></div>` : ''; })()}
     </div>
     <div class="comps-grid">
+      <div class="card span2"><div class="card-head"><h2>Multiples by industry, sector and sub-sector</h2><span class="muted small">${list.length.toLocaleString()} deals in the current filter</span></div>${clsTreeHtml(list)}</div>
       <div class="card span2"><h2>Deal activity and multiples by year</h2>${yearChart(list)}</div>
       ${(() => { const pts = list.filter(t => t.ev_revenue && t.deal_value > 0).slice(0, 1500).map(t => ({ x: t.deal_value, y: t.ev_revenue, on: true, label: `${t.target} (${t.year || ''}) · ${mult(t.ev_revenue)} · $${usdm(t.deal_value)}` }));
         const evr = list.map(t => t.ev_revenue).filter(v => v != null), eve = list.map(t => t.ev_ebitda).filter(v => v != null);
         return `<div class="card"><h2>EV/Revenue vs deal size</h2>${csScatter(pts, { refY: s1.median })}${pts.length === 1500 ? '<div class="muted small">Newest 1,500 deals with both figures.</div>' : ''}</div>
           <div class="card"><h2>Distribution of multiples</h2>${csHist(evr)}${eve.length >= 3 ? csHist(eve, { step: 4, max: 40, label: 'EV / EBITDA' }) : ''}</div>`; })()}
-      <div class="card"><h2>By sub-sector</h2>${segTable(industries, 'data-cind', cf.industry.slice(2))}</div>
-      <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
-        <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
+      <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}</div>
+      <div class="card"><h2>Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
     </div>
     <div class="table-wrap"><table class="data tx-table"><thead><tr><th class="sortable ${cf.sort === 'date' ? 'on' : ''}" data-csort="date">Date${cf.sort === 'date' ? ' ↓' : ''}</th><th>Target</th><th>Buyer</th><th>Country</th>${th('size', 'Deal value')}<th class="num">Revenue</th><th class="num">EBITDA</th>${th('evr', 'EV/Rev')}${th('eve', 'EV/EBITDA')}</tr></thead><tbody>
       ${list.slice(0, cf.limit).map(t => { const b = splitBuyers(t.buyer), c = b.map(x => crm.get(Engine.normName(x))).find(Boolean);
@@ -858,7 +897,8 @@ document.addEventListener('click', e => {
   const src = e.target.closest('[data-csrc-del]')?.dataset.csrcDel;
   if (src) return removeSource(src);
   if (x === 'buyers') return addBuyersToCompanies();
-  if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', limit: 200, open: null }); return renderComps(); }
+  if (x === 'resetcf') { Object.assign(cf, { q: '', industry: '', region: '', buyer: '', from: '', to: '', minSize: '', maxSize: '', withMult: false, status: 'live', limit: 200, open: null }); return renderComps(); }
+  if (x === 'morecf') { cf.more = !cf.more; return renderComps(); }
   const cview = e.target.closest('[data-cview]')?.dataset.cview;
   if (cview) return showTab(cview === 'set' ? 'valuation' : 'transactions');
   if (e.target.closest('#compsView') && cf.view !== 'set') {
@@ -866,6 +906,8 @@ document.addEventListener('click', e => {
     const el = s => e.target.closest(`[${s}]`)?.getAttribute(s);
     const toggle = (k, v) => { cf[k] = cf[k] === v ? '' : v; cf.limit = 200; renderComps(); };
     if (el('data-cyear')) { const y = el('data-cyear'); const on = cf.from === y && cf.to === y; cf.from = cf.to = on ? '' : y; return renderComps(); }
+    if (el('data-ctree')) { const k = el('data-ctree'); cf.tree.has(k) ? cf.tree.delete(k) : cf.tree.add(k); return renderComps(); }
+    if (el('data-ckey')) return toggle('industry', el('data-ckey'));
     if (el('data-cind') != null) return toggle('industry', clsKey(el('data-cind')));
     if (el('data-creg') != null) return toggle('region', el('data-creg'));
     if (el('data-cbuyer')) return toggle('buyer', el('data-cbuyer'));
@@ -885,7 +927,7 @@ document.addEventListener('change', e => {
   if (t.id === 'txUpload') { const files = [...t.files]; t.value = ''; if (files.length) importTransactionFiles(files); return; }
   if (t.dataset.vin && proj) return setVal(proj, v => { v.inputs ??= {}; const n = Engine.parseNumber(t.value); if (n == null) delete v.inputs[t.dataset.vin]; else v.inputs[t.dataset.vin] = n; });
   if (t.dataset.vset && proj) return setVal(proj, v => { v[t.dataset.vset] = t.value; });
-  const cfInputs = { cfIndustry: 'industry', cfRegion: 'region', cfStatus: 'status', cfFrom: 'from', cfTo: 'to', cfMin: 'minSize', cfMax: 'maxSize' };
+  const cfInputs = { cfIndustry: 'industry', cfRegion: 'region', cfStatus: 'status', cfFrom: 'from', cfTo: 'to', cfMin: 'minSize', cfMax: 'maxSize', cfBuyer: 'buyer' };
   if (cfInputs[t.id]) { cf[cfInputs[t.id]] = t.value.trim(); cf.limit = 200; renderComps(); }
   if (t.id === 'cfMult') { cf.withMult = t.checked; renderComps(); }
 });
