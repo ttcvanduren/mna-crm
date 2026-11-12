@@ -684,6 +684,14 @@ const Engine = (() => {
     return v;
   }
   const isGenericSector = s => (typeof Taxonomy !== 'undefined' ? Taxonomy.isGeneric(s) : !s);
+  // Industry › sector › sub-sector of a deal profile (project target, pitch, website lead): what was picked in the
+  // selects (cls_*), else its main niche, else its sector label.
+  function dealPath(deal) {
+    if (typeof Taxonomy === 'undefined' || !deal) return null;
+    if (deal.cls_industry) return { industry: deal.cls_industry, sector: deal.cls_sector || '', subsector: deal.cls_subsector || '', niche: deal.niche || '' };
+    const top = nichesOf(deal)[0];
+    return top ? Taxonomy.pathOf(top.niche) : Taxonomy.fromLabel(deal.sector) || Taxonomy.fromLabel(deal.subsector);
+  }
 
   function sectorScore(deal, cand) {
     // 1. Niche first: "Process mining & intelligence" says far more than "Application Software".
@@ -705,8 +713,26 @@ const Engine = (() => {
       // What the buyer says it wants must contain the niche (or a synonym), not just share a word like "analytics".
       const wants = splitList(cand.target_sectors).find(w => top.some(n => [lower(n), ...Taxonomy.synonyms(n)].some(s => w === s || w.includes(s))));
       if (wants) return [1, `Wants ${wants}`];
-      const ind = cn.find(x => x.industry === dn[0].industry);
-      if (ind) return [0.5, `Same industry: ${ind.industry} (${ind.niche})`];
+      if ((cand.buy_box?.niches || []).some(n => top.includes(n))) return [1, `Buy box: ${top[0]}`];
+    }
+    // 2. The levels above the niche: sub-sector, end market, sector. "Technology" alone never counts.
+    const dp = dealPath(deal);
+    if (dp && dp.industry) {
+      const cp = Taxonomy.pathOfCompany(cand), ap = acquisitionProfile(cand);
+      if (dp.subsector) {
+        if (cp?.subsector === dp.subsector && cp.src !== 'type') return [0.7, `Same sub-sector: ${dp.subsector}`];
+        const bs = ap.subsectors.find(([k]) => k === dp.subsector);
+        if (bs) return [bs[1] >= 2 ? 0.7 : 0.6, `Bought in ${dp.subsector} (${bs[1]}×)`];
+        if ((cand.buy_box?.niches || []).some(n => Taxonomy.subsectorOf(n) === dp.subsector)) return [0.7, `Buy box: ${dp.subsector}`];
+        const em = Taxonomy.endMarket(dp.subsector, cp);
+        if (em) return [0.55, `Operates in the end market (${em})`];
+      }
+      // Within broad sectors (vertical / horizontal software) a shared sector says little; it counts only for the narrow ones.
+      const broad = /^(Vertical software|Horizontal software)$/.test(dp.sector);
+      if (dp.sector && !broad && cp?.sector === dp.sector && cp.src !== 'type') return [0.45, `Same sector: ${dp.sector}`];
+      const bsec = dp.sector && !broad && ap.sectors.find(([k]) => k === dp.sector);
+      if (bsec) return [0.4, `Bought in ${dp.sector} (${bsec[1]}×)`];
+      if (dp.industry !== 'Technology' && cp?.industry === dp.industry && cp.sector === dp.sector) return [0.6, `Same sector: ${dp.sector}`];
     }
     // 2. Sector labels, ignoring broad ones that every software company shares.
     const ds = isGenericSector(deal.sector) ? '' : lower(deal.sector), cs = isGenericSector(cand.sector) ? '' : lower(cand.sector);
@@ -770,6 +796,14 @@ const Engine = (() => {
       const edge = min != null && tRev < min ? tRev / min : max / tRev;
       return [Math.max(0, edge - 0.5), null];
     }
+    // Buy box in enterprise value (EUR m): compare with the target's likely EV, ~2x revenue.
+    const bb = buyer.buy_box;
+    if (bb && (bb.ev_min != null || bb.ev_max != null)) {
+      const ev = tRev * 2, lo = bb.ev_min ?? 0, hi = bb.ev_max ?? Infinity;
+      if (ev >= lo && ev <= hi) return [1, `Likely EV €${fmt(ev)}m within €${fmt(lo)}–${bb.ev_max != null ? fmt(hi) : '∞'}m buy box`];
+      const edge = ev < lo ? ev / lo : hi / ev;
+      return [Math.max(0, edge - 0.5), null];
+    }
     const bRev = buyer.revenue;
     // No buyer revenue: compare the target's likely EV (~2x revenue, EUR -> USD) with the deal sizes the buyer has done.
     if (bRev == null && candIsBuyerSide) {
@@ -797,9 +831,16 @@ const Engine = (() => {
     const count = arr => [...arr.filter(Boolean).reduce((m, x) => m.set(x, (m.get(x) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]);
     const sizes = list.map(a => parseNumber(String(a.deal_value || '').replace(/^\$/, ''))).filter(x => x > 0).sort((a, b) => a - b);
     const years = list.map(a => +String(a.date || a.year || '').slice(0, 4)).filter(Boolean);
+    // Months since each deal ("2025-06" or a year, taken as mid-year): activity in the last 12 and 36 months.
+    const now = new Date(), nowM = now.getFullYear() * 12 + now.getMonth();
+    const ages = list.map(a => { const m = String(a.date || a.year || '').match(/^(\d{4})(?:-(\d{2}))?/); return m ? nowM - (+m[1] * 12 + (m[2] ? +m[2] - 1 : 6)) : null; }).filter(x => x != null);
     const p = {
+      last12: ages.filter(x => x < 12).length, last36: ages.filter(x => x < 36).length,
       n: list.length,
       niches: count(list.map(a => (typeof Taxonomy !== 'undefined' ? Taxonomy.ofDeal(a)?.niche : null))),
+      // Sub-sectors and sectors bought (from each deal's niche, else its industry label).
+      subsectors: count(list.map(a => (typeof Taxonomy !== 'undefined' ? Taxonomy.pathOfDeal(a)?.subsector : null))),
+      sectors: count(list.map(a => (typeof Taxonomy !== 'undefined' ? Taxonomy.pathOfDeal(a)?.sector : null))),
       tags: count(list.flatMap(a => String(a.tags || '').split(/,\s*/))).slice(0, 12),
       industries: count(list.map(a => a.industry)).slice(0, 6),
       countries: count(list.map(a => a.country)).slice(0, 8),
@@ -1044,7 +1085,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, nichesOf, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, nichesOf, dealPath, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

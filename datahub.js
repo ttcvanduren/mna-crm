@@ -1,4 +1,4 @@
-/* global state, $, esc, Engine, Store, ago, showTab, sourceCounts, importTransactionFiles */
+/* global state, $, esc, Engine, Store, Enricher, ago, showTab, sourceCounts, importTransactionFiles, touch, flush, toast */
 // Data & sources: one page for everything that comes into the CRM (lists, transactions, research, connectors),
 // where each record came from, and backups. Import buttons elsewhere relay to the inputs on this page.
 
@@ -71,6 +71,22 @@ document.addEventListener('change', e => {
   e.target.value = '';
   if (files.length) importTransactionFiles(files).then(() => renderData());
 });
+// Fill in from own data: facts in the Capital IQ descriptions and owners from the deal history (no web, no cost).
+document.addEventListener('click', async e => {
+  if (e.target.id !== 'fillOwnData') return;
+  const btn = e.target;
+  btn.disabled = true;
+  try {
+    const changed = new Set();
+    for (const c of state.companies) if (Enricher.derive(c)) changed.add(c);
+    const own = Enricher.ownersFromDeals(state.companies, state.transactions || []);
+    own.changed.forEach(c => changed.add(c));
+    if (changed.size) { touch(...changed); await flush(); }
+    toast(`Filled in ${changed.size.toLocaleString()} companies from your own data: ${own.sponsors.toLocaleString()} PE owners and ${own.parents.toLocaleString()} parents from the deal history.`, 8000);
+    renderData();
+  } catch (err) { toast('Could not fill in: ' + err.message, 7000); } finally { btn.disabled = false; }
+});
+
 // Links like "Import & sources →" go to another page.
 document.addEventListener('click', e => {
   const to = e.target.closest('[data-goto]')?.dataset.goto;

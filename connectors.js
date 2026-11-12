@@ -99,9 +99,10 @@ async function importAcquisitions(d) {
     if (targets.length) companies++;
   }
   await flush();
+  const tx = typeof syncResearchToTransactions === 'function' ? await syncResearchToTransactions((d.companies || []).map(it => byId(it.id)).filter(Boolean)) : null;
   renderCompanies();
   if (state.drawer) renderDrawer();
-  toast(`Acquisitions imported: ${deals} deals for ${companies} companies.`, 7000);
+  toast(`Acquisitions imported: ${deals} deals for ${companies} companies.${tx && (tx.added || tx.updated) ? ` Transactions: ${tx.added} new, ${tx.updated} completed.` : ''}`, 7000);
 }
 
 // ---------- Apollo API via proxy ----------

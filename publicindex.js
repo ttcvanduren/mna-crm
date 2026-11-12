@@ -26,8 +26,10 @@ function buildPublicIndex({ includeTransactions = true } = {}) {
   const names = Taxonomy.NICHES.map(n => n.niche), id = new Map(names.map((n, i) => [n, i]));
   const now = new Date().getFullYear();
   const blank = () => ({ years: {}, rev: [], ebitda: [], mix: { S: 0, P: 0, C: 0 } });
-  const byNiche = new Map(), byInd = new Map(), all = blank();
-  const add = (niche, fn) => { if (!niche) return; const ind = Taxonomy.industryOf(niche); for (const [m, k] of [[byNiche, niche], [byInd, ind]]) { if (!k) continue; if (!m.has(k)) m.set(k, blank()); fn(m.get(k)); } fn(all); };
+  // Statistics per niche, per sub-sector ("industry", the level right above a niche) and per sector, so the website can
+  // fall back niche → sub-sector → sector → all software when a level has too few deals.
+  const byNiche = new Map(), byInd = new Map(), bySec = new Map(), all = blank();
+  const add = (niche, fn) => { if (!niche) return; const p = Taxonomy.pathOf(niche); for (const [m, k] of [[byNiche, niche], [byInd, p?.subsector], [bySec, p?.sector]]) { if (!k) continue; if (!m.has(k)) m.set(k, blank()); fn(m.get(k)); } fn(all); };
 
   // Market statistics from the transaction database (check your S&P / Mergermarket licence before publishing these).
   if (includeTransactions) {
@@ -60,7 +62,7 @@ function buildPublicIndex({ includeTransactions = true } = {}) {
     const own = Engine.nichesOf(c).map(n => id.get(n.niche)).filter(x => x != null).slice(0, 3);
     if (!deals.length && !own.length) continue;
     if (!deals.length && !(c.role === 'Buyer' || c.role === 'Investor')) continue;
-    const kind = PI_CONS.test([c.name, ...(c.aliases || [])].join(' ')) ? 'C' : c.role === 'Investor' ? 'P' : Engine.ownershipType(c.ownership) === 'PE-backed' ? 'B' : 'S';
+    const kind = PI_CONS.test([c.name, ...(c.aliases || [])].join(' ')) || c.investor_type === 'holdco_serial' ? 'C' : c.role === 'Investor' ? 'P' : Engine.ownershipType(c.ownership) === 'PE-backed' || c.sponsor_name ? 'B' : 'S';
     const emp = c.linkedin_employees ?? c.employees;
     buyers.push({
       k: kind, r: piRegion(c.country), n: own,
@@ -72,9 +74,9 @@ function buildPublicIndex({ includeTransactions = true } = {}) {
   const index = {
     type: 'mna-crm-public-index', version: 1, built: new Date().toISOString(), year: now, minDeals: PI_MIN,
     sources: includeTransactions ? 'CRM research + transaction database' : 'CRM research only',
-    niches: names, industries: Object.fromEntries(names.map(n => [n, Taxonomy.industryOf(n)])),
+    niches: names, industries: Object.fromEntries(names.map(n => [n, Taxonomy.subsectorOf(n)])), sectors: Object.fromEntries(names.map(n => [n, Taxonomy.pathOf(n)?.sector || ''])),
     adjacent: names.map(a => names.map((b, j) => (Taxonomy.adjacent(a, b) ? j : -1)).filter(j => j >= 0)),
-    market: { niche: Object.fromEntries([...byNiche].map(([k, s]) => [k, stat(s)])), industry: Object.fromEntries([...byInd].map(([k, s]) => [k, stat(s)])), all: stat(all) },
+    market: { niche: Object.fromEntries([...byNiche].map(([k, s]) => [k, stat(s)])), industry: Object.fromEntries([...byInd].map(([k, s]) => [k, stat(s)])), sector: Object.fromEntries([...bySec].map(([k, s]) => [k, stat(s)])), all: stat(all) },
     buyers,
   };
   return index;

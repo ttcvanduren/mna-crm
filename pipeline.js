@@ -10,9 +10,11 @@ function dealOf(proj) {
     id: 'deal:' + proj.id, project: proj.name, role: 'Target', currency: 'EUR',
     name: t.codename || proj.name, website: t.website, sector: t.sector, subsector: t.subsector, country: t.country,
     revenue: t.revenue, ebitda: t.ebitda, employees: t.employees, description: t.description, keywords: t.keywords,
+    // Industry › sector › sub-sector picked in the deal profile, and a niche picked by hand (else derived from the texts).
+    cls_industry: t.cls_industry || '', cls_sector: t.cls_sector || '', cls_subsector: t.cls_subsector || '', niche: t.niche || '',
   };
 }
-const hasProfile = proj => { const t = proj.target || {}; return !!(t.sector || t.keywords || t.description); };
+const hasProfile = proj => { const t = proj.target || {}; return !!(t.sector || t.keywords || t.description || t.cls_industry || t.niche); };
 
 // Moves a buyer to a pipeline stage and logs it.
 function moveStage(c, projectName, stage, note) {
@@ -115,7 +117,7 @@ function overviewHtml(proj) {
       ${hasProfile(proj) ? `<p class="lead">${esc(t.codename || proj.name)}</p>
         ${t.description ? `<p class="prose">${esc(t.description)}</p>` : ''}
         <div class="facts">
-          ${[['Sector', [t.sector, t.subsector].filter(Boolean).join(' · ')], ['Country', t.country], ['Revenue', t.revenue != null ? eur(t.revenue) : ''], ['EBITDA', t.ebitda != null ? eur(t.ebitda) : ''], ['Employees', t.employees != null ? Engine.fmt(t.employees) : ''], ['Website', t.website]]
+          ${[['Industry', (() => { const p = Engine.dealPath(dealOf(proj)); return p ? [p.industry, p.sector, p.subsector, p.niche].filter(Boolean).join(' › ') : ''; })()], ['Sector', [t.sector, t.subsector].filter(Boolean).join(' · ')], ['Country', t.country], ['Revenue', t.revenue != null ? eur(t.revenue) : ''], ['EBITDA', t.ebitda != null ? eur(t.ebitda) : ''], ['Employees', t.employees != null ? Engine.fmt(t.employees) : ''], ['Website', t.website]]
             .filter(([, x]) => x).map(([k, x]) => `<div class="fact"><div class="k">${k}</div><div class="v">${esc(x)}</div></div>`).join('')}
         </div>${t.keywords ? `<div class="chips" style="margin-top:8px">${t.keywords.split(/[;,]/).map(k => k.trim()).filter(Boolean).map(k => `<span class="chip">#${esc(k)}</span>`).join('')}</div>` : ''}`
         : `<div class="empty">Describe the company you're selling (sector, keywords, revenue…) so <b>Find buyers</b> can rank the database.<br><br><button class="btn primary" data-x="editProfile">Add deal profile</button></div>`}

@@ -151,7 +151,7 @@ If the name is ambiguous, use the website and country to pick the right company,
     // A broad source label ("Application Software") is replaced by the researched sector; real labels from your lists are kept.
     if (p.sector && !Taxonomy.isGeneric(p.sector) && Taxonomy.isGeneric(c.sector)) c.sector = p.sector;
     // The researched niche becomes the company's niche unless you set one yourself.
-    if (p.niche && Taxonomy.industryOf(p.niche) && (!c.niche || c.niche_auto || c.niche_src === 'research')) Object.assign(c, { niche: p.niche, industry: Taxonomy.industryOf(p.niche), niche_auto: false, niche_src: 'research' });
+    if (p.niche && Taxonomy.subsectorOf(p.niche) && (!c.niche || c.niche_auto || c.niche_src === 'research')) Object.assign(c, { niche: p.niche, niche_auto: false, niche_src: 'research' });
     if (p.linkedin_url) c.linkedin_url = Engine.cleanUrl(p.linkedin_url);
     if (p.linkedin_employees) { c.linkedin_employees = toNumber(p.linkedin_employees); c.linkedin_employees_text = p.linkedin_employees; }
     if (blank(c.employees) && toNumber(p.employees)) c.employees = toNumber(p.employees);
@@ -179,14 +179,17 @@ If the name is ambiguous, use the website and country to pick the right company,
       if (!person.name) continue;
       const li = person.linkedin_url ? Engine.cleanUrl(person.linkedin_url) : '';
       const same = c.contacts.find(x => (li && x.linkedin && Engine.linkedinKey(x.linkedin) === Engine.linkedinKey(li)) || Engine.personKey(x.name) === Engine.personKey(person.name));
+      // An email only arrives when it was published on the company's own site; one you already have is kept.
+      const email = /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(person.email || '') ? person.email.trim().toLowerCase() : '';
       if (same) {
         if (li) same.linkedin = li;
+        if (email && !same.email) { same.email = email; same.email_src = 'published'; }
         if (person.title) same.title = same.title || person.title;
         if (person.role_tag && (person.role_tag !== 'Other' || !same.role_tag)) same.role_tag = person.role_tag;
         if (person.source_url) same.source_url = person.source_url;
         same.verified_at = meta.at;
       } else {
-        c.contacts.push({ name: person.name, title: person.title, role_tag: person.role_tag, linkedin: li, source: 'Claude', source_url: person.source_url, verified_at: meta.at });
+        c.contacts.push({ name: person.name, title: person.title, role_tag: person.role_tag, linkedin: li, ...(email ? { email, email_src: 'published' } : {}), source: 'Claude', source_url: person.source_url, verified_at: meta.at });
       }
     }
     c.enrichment = {
@@ -194,7 +197,119 @@ If the name is ambiguous, use the website and country to pick the right company,
       short_description: p.short_description, long_description: p.long_description, is_acquisitive: p.is_acquisitive, acquisition_focus: p.acquisition_focus,
       notes: p.notes, sources: (p.sources || []).filter(Boolean).slice(0, 30),
     };
+    applyFacts(c, p, { at: meta.at, src: 'research', level: p.research_level === 1 ? 1 : 2 });
     return c;
+  }
+
+  // ---------- Data model v2: investor type, buy box, fund, owner (see research/ENRICHMENT-STRATEGY.md) ----------
+  // All fields are optional. Amounts are EUR m. research.level: 0 = from our own data, 1 = identity pass (website,
+  // LinkedIn, owner), 2 = full research.
+  const INVESTOR_TYPES = ['buyout', 'growth', 'vc', 'family_office', 'search_fund', 'holdco_serial', 'corporate_vc', 'strategic', 'pe_backed_platform'];
+  const FINANCIAL_TYPES = new Set(['buyout', 'growth', 'vc', 'family_office', 'search_fund', 'corporate_vc']);
+  const DEAL_TYPES = ['platform', 'add_on', 'majority', 'minority', 'growth', 'carve_out'];
+  const BUY_BOX_NUM = ['ev_min', 'ev_max', 'rev_min', 'rev_max', 'ebitda_min', 'ticket_min', 'ticket_max'];
+  const BUY_BOX_LIST = ['deal_types', 'business_models', 'niches', 'countries'];
+  const num = v => { if (v === '' || v == null) return null; const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.')); return Number.isFinite(n) ? n : null; };
+  const listOf = v => (Array.isArray(v) ? v : String(v || '').split(/;\s*/)).map(s => String(s).trim()).filter(Boolean);
+  const isEmpty = v => blank(v) || (Array.isArray(v) && !v.length);
+
+  // Fills only what is blank, so your own data and earlier research win. Returns how many fields it filled.
+  function applyFacts(c, p, { at = new Date().toISOString(), src = 'research', level = 0 } = {}) {
+    let n = 0;
+    const set = (obj, k, v) => { if (isEmpty(v) || !isEmpty(obj[k])) return; obj[k] = v; n++; };
+    for (const k of ['website', 'country', 'hq_city', 'founded', 'ownership']) set(c, k, p[k]);
+    if (INVESTOR_TYPES.includes(p.investor_type)) set(c, 'investor_type', p.investor_type);
+    set(c, 'parent_name', p.parent_name);
+    if (p.sponsor_name && isEmpty(c.sponsor_name)) { c.sponsor_name = p.sponsor_name; c.sponsor_since = p.sponsor_since || ''; c.sponsor_src = src; n++; }
+    const former = listOf(p.former_names).filter(x => Engine.normName(x) !== Engine.normName(c.name));
+    if (former.length) {
+      const have = new Set((c.aliases || []).map(Engine.normName));
+      const add = former.filter(x => !have.has(Engine.normName(x)));
+      if (add.length) { c.aliases = [...(c.aliases || []), ...add]; n++; }
+    }
+    if (p.buy_box && typeof p.buy_box === 'object') {
+      const b = { ...(c.buy_box || {}) }, before = n;
+      for (const k of BUY_BOX_NUM) set(b, k, num(p.buy_box[k]));
+      for (const k of BUY_BOX_LIST) set(b, k, listOf(p.buy_box[k]));
+      if (['yes', 'no'].includes(p.buy_box.profitable_required)) set(b, 'profitable_required', p.buy_box.profitable_required);
+      if (['majority', 'minority', 'both'].includes(p.buy_box.stake)) set(b, 'stake', p.buy_box.stake);
+      set(b, 'notes', p.buy_box.notes);
+      if (n > before) {
+        if (b.deal_types) b.deal_types = b.deal_types.filter(x => DEAL_TYPES.includes(x));
+        b.source ||= p.buy_box.source || src;
+        b.as_of ||= String(at).slice(0, 10);
+        c.buy_box = b;
+        // The match engine reads these older fields: fill them from the buy box when they are blank.
+        if (c.min_revenue == null && b.rev_min != null) c.min_revenue = b.rev_min;
+        if (c.max_revenue == null && b.rev_max != null) c.max_revenue = b.rev_max;
+        if (blank(c.target_countries) && b.countries?.length) c.target_countries = b.countries.join('; ');
+        if (blank(c.target_sectors) && b.niches?.length) c.target_sectors = b.niches.join('; ');
+      }
+    }
+    if (p.fund && typeof p.fund === 'object') {
+      const f = { ...(c.fund || {}) }, before = n;
+      for (const k of ['aum', 'fund_size']) set(f, k, num(p.fund[k]));
+      for (const k of ['current_fund', 'vintage', 'close_date', 'source_url']) set(f, k, p.fund[k] ? String(p.fund[k]) : '');
+      if (n > before) { f.as_of ||= String(at).slice(0, 10); c.fund = f; }
+    }
+    // A researched niche is used unless you set one yourself.
+    if (p.niche && Taxonomy.subsectorOf(p.niche) && (!c.niche || c.niche_auto)) { Object.assign(c, { niche: p.niche, niche_auto: false, niche_src: src }); n++; }
+    // Companies outside software: industry › sector (› sub-sector) from research, unless you set it yourself.
+    const cp = Taxonomy.pathOf(p.cls_subsector) || Taxonomy.pathOf(p.cls_sector) || (Taxonomy.INDUSTRIES.includes(p.cls_industry) ? Taxonomy.pathOf(p.cls_industry) : null);
+    if (cp && !Taxonomy.pathOf(p.niche) && c.cls_src !== 'user') { Object.assign(c, { cls_industry: cp.industry, cls_sector: cp.sector, cls_subsector: cp.subsector, cls_src: 'research' }); n++; }
+    // Size and financials (EUR m); only blanks are filled. Revenue and EBITDA per employee follow from these.
+    if (blank(c.employees) && toNumber(p.employees)) { c.employees = toNumber(p.employees); n++; }
+    if (c.revenue == null && num(p.revenue) != null) { c.revenue = num(p.revenue); c.currency ||= 'EUR'; c.financials_year = String(p.financials_year || ''); n++; }
+    if (c.ebitda == null && num(p.ebitda) != null) { c.ebitda = num(p.ebitda); c.currency ||= 'EUR'; n++; }
+    if (blank(c.acquisition_focus) && p.acquisition_focus) { c.acquisition_focus = p.acquisition_focus; n++; }
+    for (const k of ['target_sectors', 'target_countries']) set(c, k, p[k]);
+    if (n || level > 0) c.research = { ...(c.research || {}), level: Math.max(c.research?.level || 0, level), at, by: src };
+    return n;
+  }
+  const isFinancial = c => c.role === 'Investor' || FINANCIAL_TYPES.has(c.investor_type);
+
+  // Facts written in a Capital IQ description: founding year, HQ city, parent and former names. No web, no cost.
+  function derive(c) {
+    const d = String(c.description || '');
+    if (!d) return 0;
+    const p = {};
+    p.founded = d.match(/\b(?:founded|incorporated|established) in (\d{4})\b/i)?.[1] || '';
+    const hq = d.match(/\b(?:headquartered|based) in ([^.;(]+)/)?.[1]?.split(/\s+(?:with|and|where|that|which)\s+/)[0];
+    const parts = (hq || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 2 && /^[A-Z]/.test(parts[0]) && parts[0].length < 40) p.hq_city = parts[0];
+    const owner = d.match(/\b(?:operates as a subsidiary|is a portfolio company) of (.+?)\.(?=\s+[A-Z]|\s*$)/)?.[1]?.split(/\s+with\s+/)[0].trim();
+    if (owner && owner.length < 120) p.parent_name = owner;
+    p.former_names = d.match(/\bformerly known as (.+?)\.(?=\s+[A-Z]|\s*$)/)?.[1]?.split(/\s+(?:and|until)\s+/)[0] || '';
+    return applyFacts(c, p, { src: 'S&P description', level: 0 });
+  }
+
+  // Owners from the deal history: the latest buyer of a company in the database. A financial buyer becomes the
+  // sponsor (PE-backed platform), a strategic one the parent. Only fills blanks or earlier derived values.
+  function ownersFromDeals(companies, transactions) {
+    const byName = new Map();
+    for (const c of companies) for (const n of [c.name, ...(c.aliases || [])]) { const k = Engine.normName(n); if (k && !byName.has(k)) byName.set(k, c); }
+    const latest = new Map();
+    for (const t of transactions || []) {
+      if (/terminated|withdrawn/i.test(t.status || '')) continue;
+      const target = byName.get(Engine.normName(t.target)), buyer = byName.get(Engine.normName(t.buyer));
+      if (!target || !buyer || target === buyer) continue;
+      const date = String(t.date || t.year || '');
+      const prev = latest.get(target);
+      if (!prev || date > prev.date) latest.set(target, { buyer, date });
+    }
+    const changed = [];
+    let sponsors = 0, parents = 0;
+    for (const [c, { buyer, date }] of latest) {
+      if (isFinancial(c)) continue;
+      const year = date.slice(0, 4);
+      if (isFinancial(buyer)) {
+        if ((isEmpty(c.sponsor_name) || c.sponsor_src === 'deals') && (c.sponsor_id !== buyer.id || c.sponsor_since !== year)) {
+          Object.assign(c, { sponsor_name: buyer.name, sponsor_id: buyer.id, sponsor_since: year, sponsor_src: 'deals' });
+          sponsors++; changed.push(c);
+        }
+      } else if (isEmpty(c.parent_name)) { c.parent_name = buyer.name; c.parent_id = buyer.id; parents++; changed.push(c); }
+    }
+    return { sponsors, parents, changed };
   }
 
   // Quick profile of a company being valued, read from its own website (comp set builder). Cheap: a few page fetches, no people or deals.
@@ -245,5 +360,5 @@ If the name is ambiguous, use the website and country to pick the right company,
     throw new Error('No profile returned.');
   }
 
-  return { MODELS, DEFAULT_MODEL, ROLE_TAGS, research, apply, readWebsite };
+  return { MODELS, DEFAULT_MODEL, ROLE_TAGS, INVESTOR_TYPES, DEAL_TYPES, research, apply, applyFacts, derive, ownersFromDeals, isFinancial, readWebsite };
 })();

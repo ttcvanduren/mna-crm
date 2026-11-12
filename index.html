@@ -81,7 +81,7 @@
           </div>
           <div class="actions">
             <button class="btn" id="addCompany">+ Add company</button>
-            <label class="btn" title="Import a research file made by Claude Code">✦ Import research<input type="file" data-relay="importResearch" accept=".json" hidden></label>
+            <label class="btn" title="Import a research file made by Claude Code">✦ Import research<input type="file" data-relay="importResearch" accept=".json" multiple hidden></label>
             <label class="btn primary">Import list<input type="file" data-relay="upload" accept=".csv,.xlsx,.xls,.xlsm" multiple hidden></label>
           </div>
         </div>
@@ -259,7 +259,8 @@
           <div class="card">
             <h2><span class="step">3</span> Research (Claude)</h2>
             <p class="muted small">Select companies on the Companies page → <b>✦ Export for research</b>, let Claude Code research the file, then import the results here (profiles, people, acquisitions, descriptions, industry &amp; niche).</p>
-            <div class="toolbar"><label class="btn primary">✦ Import research<input type="file" id="importResearch" accept=".json" hidden></label></div>
+            <div class="toolbar"><label class="btn primary">✦ Import research<input type="file" id="importResearch" accept=".json" multiple hidden></label>
+              <button class="btn" id="fillOwnData" title="Free, no web: founding year, HQ city, parent and former names from the Capital IQ descriptions, and PE owners from the deal history">Fill in from own data</button></div>
             <div id="dataResearch" class="muted small"></div>
           </div>
           <div class="card">

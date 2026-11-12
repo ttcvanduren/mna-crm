@@ -1,4 +1,4 @@
-/* global Engine, Store, XLSX, state, esc, norm, toast, showTab, saveProjects, dealOf, eur, members, renderProjects, today, newCompany, touch, flush, renderCompanies, mergeAcquisitions */
+/* global Engine, Taxonomy, Store, XLSX, state, esc, norm, toast, showTab, saveProjects, dealOf, eur, members, renderProjects, today, newCompany, touch, flush, renderCompanies, mergeAcquisitions */
 // Comparable-transactions valuation: a transactions database (e.g. Capital IQ exports), similarity matching against a
 // project's deal profile, a 10-factor software scorecard that adjusts the median multiples, and a printable report.
 
@@ -332,7 +332,17 @@ function compareTx(profile, t, prep) {
   const hitScore = prep.phrases.length ? Math.min(1, hits.length / Math.min(2, prep.phrases.length)) : 0;
   const textScore = Math.min(1, Math.max(hitScore, cos) + 0.25 * Math.min(hitScore, cos));
   const ind = String(t.industry || '').toLowerCase();
-  const indScore = prep.segments.some(s => ind.includes(s)) ? 1 : prep.segments.some(s => s.split(' ').some(w => w.length > 4 && ind.includes(w))) ? 0.5 : 0;
+  const labelScore = prep.segments.some(s => ind.includes(s)) ? 1 : prep.segments.some(s => s.split(' ').some(w => w.length > 4 && ind.includes(w))) ? 0.5 : 0;
+  // Industry › sector › sub-sector › niche of the deal against the profile's (taxonomy.js).
+  const tp = prep.path, dp = tp ? Taxonomy.pathOfDeal(t) : null;
+  let cls = 0, clsWhy = '';
+  if (tp && dp) {
+    if (tp.niche && dp.niche === tp.niche) { cls = 1; clsWhy = `same niche (${tp.niche})`; }
+    else if (tp.subsector && dp.subsector === tp.subsector) { cls = 0.8; clsWhy = `same sub-sector (${tp.subsector})`; }
+    else if (tp.niche && dp.niche && Taxonomy.adjacent(tp.niche, dp.niche)) { cls = 0.6; clsWhy = `related niche (${dp.niche})`; }
+    else if (tp.sector && dp.sector === tp.sector) cls = /^(Vertical|Horizontal) software$/.test(tp.sector) ? 0.3 : 0.5;
+  }
+  const indScore = Math.max(labelScore * 0.6, cls);
   let sizeScore = 0.4, sizeWhy = '';
   const toEur = x => (x * (FX[t.currency || 'USD'] || 1)) / FX.EUR;
   if (profile.revenue > 0 && t.revenue > 0) { const r = Math.abs(Math.log(profile.revenue / toEur(t.revenue))); sizeScore = Math.max(0, 1 - r / Math.log(10)); if (sizeScore > 0.6) sizeWhy = `similar size (${Engine.fmt(t.revenue)}m revenue)`; }
@@ -344,8 +354,8 @@ function compareTx(profile, t, prep) {
   const tc = String(t.country || '').toLowerCase(), pc = String(profile.country || '').toLowerCase();
   const tr = txRegion(t), pr = REGION_OF(profile.country);
   const geo = !tc ? 0.4 : pc && tc.includes(pc) ? 1 : pr && tr === pr ? 0.75 : EUROPE.has(pr) && EUROPE.has(tr) ? 0.5 : 0.25;
-  const score = 0.4 * textScore + 0.15 * indScore + 0.2 * sizeScore + 0.15 * recency + 0.1 * geo;
-  const why = [hits.length ? `matches ${hits.slice(0, 3).join(', ')}` : shared.length ? `shares ${shared.slice(0, 3).join(', ')}` : '', indScore === 1 ? 'same industry' : '', sizeWhy, geo >= 0.75 && t.country ? `${t.country}` : '', age != null && age <= 3 ? `recent (${t.year})` : ''].filter(Boolean);
+  const score = (tp ? 0.33 : 0.4) * textScore + (tp ? 0.22 : 0.15) * indScore + 0.2 * sizeScore + 0.15 * recency + 0.1 * geo;
+  const why = [clsWhy, hits.length ? `matches ${hits.slice(0, 3).join(', ')}` : shared.length ? `shares ${shared.slice(0, 3).join(', ')}` : '', !clsWhy && labelScore === 1 ? 'same industry' : '', sizeWhy, geo >= 0.75 && t.country ? `${t.country}` : '', age != null && age <= 3 ? `recent (${t.year})` : ''].filter(Boolean);
   return { t, score: Math.round(score * 100), why };
 }
 
@@ -390,7 +400,7 @@ function scorecard(proj) {
 function compsFor(proj) {
   const v = proj.valuation || {};
   const profile = dealOf(proj);
-  const prep = { phrases: phrasesOf(profile.keywords), words: words([profile.description, profile.keywords, profile.sector, profile.subsector].join(' ')), segments: phrasesOf([profile.sector, profile.subsector].join('/')) };
+  const prep = { phrases: phrasesOf(profile.keywords), words: words([profile.description, profile.keywords, profile.sector, profile.subsector].join(' ')), segments: phrasesOf([profile.sector, profile.subsector].join('/')), path: Engine.dealPath(profile) };
   const yearsBack = Number(v.yearsBack) || 10, minYear = new Date().getFullYear() - yearsBack;
   const region = v.region || '';
   const pool = state.transactions.filter(t => (t.ev_revenue || t.ev_ebitda) && !isDead(t) && (!t.year || t.year >= minYear) && (!region || (region === 'Europe' ? EUROPE.has(txRegion(t)) : txRegion(t) === region)) && !/minority/i.test(t.type || ''));
@@ -517,11 +527,26 @@ const splitBuyers = s => String(s || '').split(/;\s*/).map(b => b.replace(/\s*\(
 const FIN_BUYER = /capital|partners|equity|private|fund|ventures|investment|investors|holdings? (llc|lp)|l\.?p\.?$|advisors|management (llc|lp)/i;
 const usdm = x => (x == null ? '–' : x >= 1000 ? `${(x / 1000).toFixed(1)}bn` : `${Engine.fmt(x)}m`);
 
+// Industry › sector › sub-sector › niche of a deal (taxonomy.js; the niche is stored on the deal once derived).
+// Filter values: "I:", "S:", "U:", "n:" + name, or "l:" + the deal's own industry label.
+function txClsMatches(t, v) {
+  const k = v.slice(2), p = Taxonomy.pathOfDeal(t);
+  return v[0] === 'I' ? p?.industry === k : v[0] === 'S' ? p?.sector === k : v[0] === 'U' ? p?.subsector === k : v[0] === 'n' ? p?.niche === k : v[0] === 'l' ? t.industry === k : t.industry === v;
+}
+// A level name -> its filter value ("U:ERP & finance").
+const clsKey = k => !k ? '' : Taxonomy.SUBSECTORS.includes(k) ? 'U:' + k : Taxonomy.SECTORS.includes(k) && !Taxonomy.INDUSTRIES.includes(k) ? 'S:' + k : Taxonomy.INDUSTRIES.includes(k) ? 'I:' + k : Taxonomy.pathOf(k)?.niche ? 'n:' + k : 'l:' + k;
+function txClsOptions(list, cur) {
+  const cnt = new Map(), inc = k => cnt.set(k, (cnt.get(k) || 0) + 1);
+  for (const t of list) { const p = Taxonomy.pathOfDeal(t); if (!p) continue; inc('I:' + p.industry); if (p.sector) inc('S:' + p.sector); if (p.subsector) inc('U:' + p.subsector); if (p.niche) inc('n:' + p.niche); }
+  const pad = '   ';
+  const opt = (v, l, d) => cnt.get(v) || v === cur ? `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${pad.repeat(d)}${d ? '› ' : ''}${esc(l)} (${(cnt.get(v) || 0).toLocaleString()})</option>` : '';
+  return Taxonomy.TREE.map(t => opt('I:' + t.industry, t.industry, 0) + t.sectors.map(s => opt('S:' + s.sector, s.sector, 1) + s.subsectors.map(u => opt('U:' + u.subsector, u.subsector, 2) + u.niches.map(n => opt('n:' + n, n, 3)).join('')).join('')).join('')).join('');
+}
 function filteredTx() {
   const q = cf.q.toLowerCase(), b = cf.buyer.toLowerCase();
   const list = state.transactions.filter(t => (!cf.withMult || t.ev_revenue || t.ev_ebitda) &&
     (cf.status === 'all' || (cf.status === 'live' ? !isDead(t) : /complet|closed|effective/i.test(t.status || ''))) &&
-    (!cf.industry || t.industry === cf.industry) && (!cf.region || bigRegion(t) === cf.region) &&
+    (!cf.industry || txClsMatches(t, cf.industry)) && (!cf.region || bigRegion(t) === cf.region) &&
     (!b || String(t.buyer || '').toLowerCase().includes(b)) &&
     (!cf.from || (t.year || 0) >= +cf.from) && (!cf.to || (t.year || 9999) <= +cf.to) &&
     (!cf.minSize || (t.deal_value ?? t.ev ?? -1) >= +cf.minSize) && (!cf.maxSize || (t.deal_value ?? t.ev ?? Infinity) <= +cf.maxSize) &&
@@ -591,20 +616,21 @@ function renderComps() {
   const sizes = list.map(t => t.deal_value).filter(x => x > 0);
   const buyers = list.flatMap(t => splitBuyers(t.buyer));
   const fin = list.filter(t => splitBuyers(t.buyer).some(b => FIN_BUYER.test(b))).length;
-  const industries = groupStats(list, t => t.industry).sort((a, b) => b.n - a.n);
+  // By sub-sector (else sector) from the taxonomy instead of broad labels like "Application Software".
+  const industries = groupStats(list, t => { const p = Taxonomy.pathOfDeal(t); return p ? p.subsector || p.sector || p.industry : ''; }).sort((a, b) => b.n - a.n);
   const regions = groupStats(list, bigRegion).sort((a, b) => b.n - a.n);
   const crm = crmIndex();
   const topBuyers = [...buyers.reduce((m, b) => m.set(b, (m.get(b) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]).slice(0, 12);
-  const allInd = [...new Set(all.map(t => t.industry).filter(Boolean))].sort();
+  const clsOptions = txClsOptions(all, cf.industry);
   const allReg = [...new Set(all.map(bigRegion))].sort();
-  const active = [cf.q && `“${cf.q}”`, cf.industry, cf.region, cf.buyer && `buyer: ${cf.buyer}`, (cf.from || cf.to) && `${cf.from || '…'}–${cf.to || '…'}`, (cf.minSize || cf.maxSize) && `size ${cf.minSize || 0}–${cf.maxSize || '∞'}m`].filter(Boolean);
+  const active = [cf.q && `“${cf.q}”`, cf.industry.slice(2), cf.region, cf.buyer && `buyer: ${cf.buyer}`, (cf.from || cf.to) && `${cf.from || '…'}–${cf.to || '…'}`, (cf.minSize || cf.maxSize) && `size ${cf.minSize || 0}–${cf.maxSize || '∞'}m`].filter(Boolean);
   const th = (k, label) => `<th class="num sortable ${cf.sort === k ? 'on' : ''}" data-csort="${k}">${label}${cf.sort === k ? ' ↓' : ''}</th>`;
 
   $('#compsView').innerHTML = `<div class="page-head"><div><h1>Transactions</h1><div class="muted">${all.length.toLocaleString()} transactions · ${all.filter(t => t.ev_revenue).length.toLocaleString()} with EV/Revenue · ${all.filter(t => t.ev_ebitda).length.toLocaleString()} with EV/EBITDA · amounts in USD m</div></div>
       <div class="actions"><button class="btn" data-vx="exporttx">Export filtered (${list.length.toLocaleString()})</button><button class="btn" data-goto="data" title="Import files, sources, master file">Import & sources →</button></div></div>
     <div class="filters">
       <input type="search" id="cfQ" placeholder="Search target, buyer, tags, description… (e.g. document management, insurance, ERP)" value="${esc(cf.q)}">
-      <select id="cfIndustry"><option value="">All industries</option>${allInd.map(c => `<option ${c === cf.industry ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
+      <select id="cfIndustry"><option value="">All industries</option>${clsOptions}</select>
       <select id="cfRegion"><option value="">All regions</option>${allReg.map(c => `<option ${c === cf.region ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>
       <select id="cfStatus"><option value="live" ${cf.status === 'live' ? 'selected' : ''}>Completed + pending</option><option value="done" ${cf.status === 'done' ? 'selected' : ''}>Completed only</option><option value="all" ${cf.status === 'all' ? 'selected' : ''}>Incl. terminated</option></select>
       <label class="row-label">Years <input id="cfFrom" value="${esc(cf.from)}" placeholder="2015" style="width:58px">–<input id="cfTo" value="${esc(cf.to)}" placeholder="2026" style="width:58px"></label>
@@ -617,6 +643,7 @@ function renderComps() {
       <div class="kpi"><div class="k">Median deal size</div><div class="v">${usdm(med(sizes))}</div><div class="muted small">P25–P75 ${usdm(percentile(sizes, 0.25))}–${usdm(percentile(sizes, 0.75))}</div></div>
       <div class="kpi"><div class="k">Median EV/Revenue</div><div class="v">${mult(s1.median)}</div><div class="muted small">P25–P75 ${mult(s1.p25)}–${mult(s1.p75)} · n=${s1.n}</div></div>
       <div class="kpi"><div class="k">Median EV/EBITDA</div><div class="v">${mult(s2.median)}</div><div class="muted small">P25–P75 ${mult(s2.p25)}–${mult(s2.p75)} · n=${s2.n}</div></div>
+      ${(() => { const pe = perEmployee(list); return pe.rev.n ? `<div class="kpi"><div class="k">Revenue / employee</div><div class="v">$${Engine.fmt(pe.rev.median)}k</div><div class="muted small">P25–P75 $${Engine.fmt(pe.rev.p25)}k–$${Engine.fmt(pe.rev.p75)}k · n=${pe.rev.n}${pe.ebitda.n >= 3 ? ` · EBITDA/employee $${Engine.fmt(pe.ebitda.median)}k` : ''}</div></div>` : ''; })()}
     </div>
     <div class="comps-grid">
       <div class="card span2"><h2>Deal activity and multiples by year</h2>${yearChart(list)}</div>
@@ -624,7 +651,7 @@ function renderComps() {
         const evr = list.map(t => t.ev_revenue).filter(v => v != null), eve = list.map(t => t.ev_ebitda).filter(v => v != null);
         return `<div class="card"><h2>EV/Revenue vs deal size</h2>${csScatter(pts, { refY: s1.median })}${pts.length === 1500 ? '<div class="muted small">Newest 1,500 deals with both figures.</div>' : ''}</div>
           <div class="card"><h2>Distribution of multiples</h2>${csHist(evr)}${eve.length >= 3 ? csHist(eve, { step: 4, max: 40, label: 'EV / EBITDA' }) : ''}</div>`; })()}
-      <div class="card"><h2>By industry</h2>${segTable(industries, 'data-cind', cf.industry)}</div>
+      <div class="card"><h2>By sub-sector</h2>${segTable(industries, 'data-cind', cf.industry.slice(2))}</div>
       <div class="card"><h2>By region</h2>${segTable(regions, 'data-creg', cf.region)}
         <h2 style="margin-top:14px">Most active buyers</h2><div class="buyers">${topBuyers.map(([b, n]) => { const c = crm.get(Engine.normName(b)); return `<div class="buyer-row"><button class="link" data-cbuyer="${esc(b)}">${esc(b)}</button>${c ? ` <button class="chip blue" data-open="${c.id}" title="Open in CRM">in CRM</button>` : ''}<span class="muted small">${n}</span></div>`; }).join('')}</div></div>
     </div>
@@ -656,6 +683,51 @@ async function removeSource(src) {
   state.transactions = state.transactions.filter(t => { const s = (t.sources || [t.source]).filter(x => x !== src); if (!s.length) return false; t.sources = s; t.source = s[0]; return true; });
   await saveTransactions();
   renderComps();
+}
+
+// ---------- Research → transactions ----------
+// Facts research finds about a company's acquisitions (deal value, the target's employees, revenue, EBITDA) also go into
+// the transaction database: they fill blanks on the matching deal (Capital IQ / Mergermarket ID, else target + year), and
+// sourced deals that aren't in it yet are added as "Claude research", so comps and per-employee benchmarks grow with
+// every round. Amounts are converted to USD m like the rest of the database; an amount without a currency is skipped.
+const RESEARCH_TX_SOURCE = 'Claude research';
+function moneyUsdM(s) {
+  if (s == null || s === '') return null;
+  const m = String(s).match(new RegExp(AMT_RE, 'i'));
+  if (!m) return null;
+  const a = amount(m[1], m[2], m[3]), fx = FX[a.cur];
+  return fx && a.v > 0 ? Math.round(a.v * fx * 100) / 100 : null;
+}
+const headcountOf = s => { const m = String(s ?? '').replace(/(\d)[,.](?=\d{3}\b)/g, '$1').match(/\d+/); return m && +m[0] > 0 ? +m[0] : null; };
+async function syncResearchToTransactions(companies) {
+  const incoming = [];
+  for (const c of companies) for (const a of c.acquisitions || []) {
+    if (!a.target) continue;
+    const emp = headcountOf(a.target_employees), rev = moneyUsdM(a.target_revenue), val = moneyUsdM(a.deal_value), eb = moneyUsdM(a.target_ebitda);
+    const imported = /capital iq|mergermarket/i.test(a.source || '');
+    // Deals from the exports only get new facts; researched deals need a source and a year to become a transaction.
+    if (imported && !a.tx_id) continue;
+    if (imported && emp == null && a.target_ebitda == null) continue;
+    const year = +String(a.date || a.year || '').slice(0, 4) || null;
+    if (!imported && (!a.source_url || !year || (emp == null && rev == null && val == null && eb == null))) continue;
+    incoming.push(finishTx({
+      id: a.tx_id || '', target: a.target, buyer: c.name, date: a.date || (year ? String(year) : ''), deal_value: imported ? null : val,
+      revenue: imported ? null : rev, ebitda: eb, employees: emp, country: a.country || '', description: imported ? '' : a.description || '',
+      industry: imported ? '' : a.industry || '', type: imported ? '' : a.type || 'Acquisition', status: imported ? '' : 'Completed', currency: 'USD',
+      source: RESEARCH_TX_SOURCE, sources: [RESEARCH_TX_SOURCE], source_url: a.source_url || '',
+    }));
+  }
+  if (!incoming.length) return { added: 0, updated: 0 };
+  const r = mergeTransactionList(incoming);
+  await saveTransactions();
+  return { added: r.added, updated: r.updated };
+}
+
+// Revenue and EBITDA per employee (USD k) over deals that have both figures.
+function perEmployee(list) {
+  const rev = list.filter(t => t.revenue > 0 && t.employees > 0).map(t => (t.revenue * 1000) / t.employees);
+  const eb = list.filter(t => t.ebitda != null && t.employees > 0).map(t => (t.ebitda * 1000) / t.employees);
+  return { rev: stat(rev), ebitda: stat(eb) };
 }
 
 // ---------- Buyers → Companies: every acquirer becomes a company with its deal history ----------
@@ -794,7 +866,7 @@ document.addEventListener('click', e => {
     const el = s => e.target.closest(`[${s}]`)?.getAttribute(s);
     const toggle = (k, v) => { cf[k] = cf[k] === v ? '' : v; cf.limit = 200; renderComps(); };
     if (el('data-cyear')) { const y = el('data-cyear'); const on = cf.from === y && cf.to === y; cf.from = cf.to = on ? '' : y; return renderComps(); }
-    if (el('data-cind') != null) return toggle('industry', el('data-cind'));
+    if (el('data-cind') != null) return toggle('industry', clsKey(el('data-cind')));
     if (el('data-creg') != null) return toggle('region', el('data-creg'));
     if (el('data-cbuyer')) return toggle('buyer', el('data-cbuyer'));
     if (el('data-ctag')) { cf.q = el('data-ctag'); return renderComps(); }

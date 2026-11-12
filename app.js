@@ -98,15 +98,18 @@ function classifyNiche(c) {
   // Only re-derive when the texts (or a hand-set niche) changed: a signature is stored with the company, and so are
   // its top niches (c.niches), which the match engine reads instead of classifying every company again.
   const sig = [c.sector, c.subsector, (c.tags || []).join(), c.keywords, c.short_description, String(c.description || '').length, String(c.summary || '').length].join('|').length + ':' + String(c.short_description || '').slice(0, 40) + ':' + String(c.description || '').slice(0, 40) + ':' + (c.subsector || '') + ':' + (c.niche_auto ? '' : c.niche || '') + ':v' + Taxonomy.VERSION;
-  if (c.niche_sig === sig && c.niches) { if (c.niche && !c.niche_auto) c.industry ||= Taxonomy.industryOf(c.niche); return; }
+  // `industry` used to hold the group above the niche; industry › sector › sub-sector now follow from the niche
+  // (Taxonomy.pathOfCompany), so the old field is dropped.
+  if ('industry' in c) delete c.industry;
+  if (c.niche_sig === sig && c.niches) return;
   c.niche_sig = sig;
   nicheChanged.add(c.id);
   const list = Taxonomy.classify(c);
   c.niches = list.slice(0, 3).map(({ niche, industry, score }) => ({ niche, industry, score }));
-  if (c.niche && !c.niche_auto) { c.industry ||= Taxonomy.industryOf(c.niche); return; }
+  if (c.niche && !c.niche_auto) return;
   const n = list[0];
-  if (n) Object.assign(c, { niche: n.niche, industry: n.industry, niche_auto: true });
-  else if (c.niche_auto) { delete c.niche; delete c.industry; delete c.niche_auto; }
+  if (n) Object.assign(c, { niche: n.niche, niche_auto: true });
+  else if (c.niche_auto) { delete c.niche; delete c.niche_auto; }
 }
 // Every deal gets its niche classified once (Taxonomy.ofDeal stores it on the deal). Done in small slices while the
 // page is idle so it never blocks you; in browser storage the result is saved, so later buyer searches start fast.
@@ -227,6 +230,7 @@ function badges(c, { all = false } = {}) {
   if (all && c.enrichment) out.push('<span class="bdg res" title="Researched with Claude">✦ Researched</span>');
   if (n >= 5 || c.enrichment?.is_acquisitive === 'yes') out.push(`<span class="bdg acq" title="${n} acquisitions on record">Acquisitive${n ? ' · ' + n : ''}</span>`);
   if (own === 'PE-backed' || own === 'VC-backed') out.push(`<span class="bdg pe" title="${esc(c.ownership)}">${own}</span>`);
+  else if (c.sponsor_name) out.push(`<span class="bdg pe" title="Owned by ${esc(c.sponsor_name)}${c.sponsor_since ? ' since ' + esc(c.sponsor_since) : ''}">PE-backed</span>`);
   else if (own === 'Listed' || c.ticker) out.push(`<span class="bdg pe" title="${esc(c.ownership || c.ticker || '')}">Listed${c.ticker ? ' · ' + esc(c.ticker) : ''}</span>`);
   if (all && Engine.hasEmail(c)) out.push('<span class="bdg mail" title="Has a contact with an email address">✉ Reachable</span>');
   if (all && c.projects.length) out.push(`<span class="bdg deal">In ${c.projects.length} mandate${c.projects.length > 1 ? 's' : ''}</span>`);
@@ -302,7 +306,7 @@ function filteredCompanies() {
     (!role || c.role === role) &&
     (!project || c.projects.some(p => p.project === project)) &&
     (!country || c.country === country) &&
-    (!sector || (sector.startsWith('i:') ? c.industry === sector.slice(2) : sector.startsWith('n:') ? c.niche === sector.slice(2) : c.sector === sector)) &&
+    (!sector || clsMatches(c, sector)) &&
     (!own || Engine.ownershipType(c.ownership) === own) &&
     (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
     (!multi || c.projects.length > 1) &&
@@ -357,8 +361,61 @@ function renderCompanies() {
   renderData(); // keeps the source counts current when the Data page is open
 }
 
-// Niche (with its industry) instead of a broad label like "Application Software"; the label stays visible if there's no niche.
-const industryCell = c => (c.niche ? `<span title="${esc([c.industry, c.niche_auto ? 'auto' : '', c.sector && !Taxonomy.isGeneric(c.sector) ? c.sector : ''].filter(Boolean).join(' · '))}">${esc(c.niche)}</span><div class="muted small">${esc(c.industry || '')}</div>` : esc(c.sector || ''));
+// Industry › sector › sub-sector › niche (taxonomy.js). One select on the Companies page holds the whole tree;
+// values are "I:industry", "S:sector", "U:sub-sector", "n:niche" or "l:own label" for companies not classified yet.
+const clsMatches = (c, v) => {
+  const k = v.slice(2), p = Taxonomy.pathOfCompany(c);
+  // "i:" is the old group level from saved searches; those names are sub-sectors now.
+  return v[0] === 'I' ? p?.industry === k : v[0] === 'S' ? p?.sector === k : v[0] === 'U' || v[0] === 'i' ? p?.subsector === k : v[0] === 'n' ? c.niche === k : c.sector === k;
+};
+// Four linked selects (industry → sector → sub-sector → niche) for the company page and deal profiles. `p` is the
+// current path; `attr` names the data attribute the change handler listens to.
+function clsEditorHtml(p, attr, id) {
+  p = p || {};
+  const t = Taxonomy.TREE.find(x => x.industry === p.industry), s = t?.sectors.find(x => x.sector === p.sector), u = s?.subsectors.find(x => x.subsector === p.subsector);
+  const sel = (level, list, cur, all) => `<select ${attr}="${level}" data-id="${esc(id)}" class="cls-select"><option value="">${all}</option>${list.map(v => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+  return `<div class="cls-edit">${sel('industry', Taxonomy.INDUSTRIES, p.industry, 'Industry…')}
+    ${t ? sel('sector', t.sectors.map(x => x.sector), p.sector, 'Sector…') : ''}
+    ${s && s.subsectors.length ? sel('subsector', s.subsectors.map(x => x.subsector), p.subsector, 'Sub-sector…') : ''}
+    ${u && u.niches.length ? sel('niche', u.niches, p.niche, 'Niche…') : ''}</div>`;
+}
+// Applies a change in those selects to an object with cls_* / niche fields (a company or a deal profile).
+function applyClsChange(o, level, value, base) {
+  const clear = (...ks) => ks.forEach(k => delete o[k]);
+  if (level === 'niche') {
+    if (value) { Object.assign(o, { niche: value, niche_auto: false }); clear('cls_industry', 'cls_sector', 'cls_subsector', 'cls_src'); }
+    else { const p = Taxonomy.pathOf(o.niche); if (p) Object.assign(o, { cls_industry: p.industry, cls_sector: p.sector, cls_subsector: p.subsector, cls_src: 'user' }); o.niche_auto = true; }
+    return;
+  }
+  const cur = base || Taxonomy.pathOfCompany(o) || {};
+  const next = level === 'industry' ? { industry: value } : level === 'sector' ? { industry: cur.industry, sector: value } : { industry: cur.industry, sector: cur.sector, subsector: value };
+  if (!next.industry) { clear('cls_industry', 'cls_sector', 'cls_subsector', 'cls_src'); if (!o.niche_auto) o.niche_auto = true; return; }
+  Object.assign(o, { cls_industry: next.industry, cls_sector: next.sector || '', cls_subsector: next.subsector || '', cls_src: 'user' });
+  // A niche outside the chosen sub-sector no longer fits: let it be re-derived.
+  if (o.niche && Taxonomy.subsectorOf(o.niche) !== next.subsector) { if (o.niche_auto === false) o.niche_auto = true; }
+}
+const clsLine = p => [p?.industry, p?.sector, p?.subsector].filter(Boolean).join(' › ');
+// The deepest known level (niche, else sub-sector, else sector) with the path above it; the source label if nothing is known.
+const industryCell = c => {
+  const p = Taxonomy.pathOfCompany(c);
+  if (!p) return esc(c.sector || '');
+  const main = c.niche || p.subsector || p.sector || p.industry;
+  const up = [p.industry, p.sector, p.subsector].filter(x => x && x !== main).join(' › ');
+  return `<span title="${esc([clsLine(p), c.niche_auto ? 'niche found automatically' : '', c.sector && !Taxonomy.isGeneric(c.sector) ? c.sector : ''].filter(Boolean).join(' · '))}">${esc(main)}</span><div class="muted small">${esc(up)}</div>`;
+};
+function clsFilterHtml(cur) {
+  const cnt = new Map(), inc = k => cnt.set(k, (cnt.get(k) || 0) + 1), labels = new Map();
+  for (const c of state.companies) {
+    const p = Taxonomy.pathOfCompany(c);
+    if (!p) { if (c.sector) labels.set(c.sector, (labels.get(c.sector) || 0) + 1); continue; }
+    inc('I:' + p.industry); if (p.sector) inc('S:' + p.sector); if (p.subsector) inc('U:' + p.subsector); if (c.niche && p.subsector) inc('n:' + c.niche);
+  }
+  const ind = '   ';
+  const opt = (v, l, depth) => cnt.get(v) ? `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${ind.repeat(depth)}${depth ? '› ' : ''}${esc(l)} (${cnt.get(v).toLocaleString()})</option>` : '';
+  const tree = Taxonomy.TREE.map(t => opt('I:' + t.industry, t.industry, 0) + t.sectors.map(s => opt('S:' + s.sector, s.sector, 1) + s.subsectors.map(u => opt('U:' + u.subsector, u.subsector, 2) + u.niches.map(n => opt('n:' + n, n, 3)).join('')).join('')).join('')).join('');
+  const rest = [...labels].sort((a, b) => b[1] - a[1]).map(([l, n]) => `<option value="${esc('l:' + l)}" ${'l:' + l === cur ? 'selected' : ''}>${esc(l)} (${n})</option>`).join('');
+  return `<option value="">All industries</option>${tree}${rest ? `<optgroup label="Not classified yet (own label)">${rest}</optgroup>` : ''}`;
+}
 function renderFilterOptions() {
   const fill = (sel, values, all, label = v => v) => {
     const cur = $(sel).value;
@@ -368,19 +425,9 @@ function renderFilterOptions() {
   fill('#filterRole', [...new Set(state.companies.map(c => c.role).filter(Boolean))].sort(), 'Strategic + financial', roleLabel);
   fill('#filterProject', [...new Set(state.companies.flatMap(c => c.projects.map(p => p.project)).filter(Boolean))].sort(), 'All projects');
   fill('#filterCountry', [...new Set(state.companies.map(c => c.country).filter(Boolean))].sort(), 'All countries');
-  // Industry > niche from the taxonomy; companies without a niche can still be found by their own sector label.
+  // Industry › sector › sub-sector › niche in one select; companies not classified yet can be found by their own label.
   {
-    const cur = $('#filterSector').value, count = new Map();
-    state.companies.forEach(c => { if (c.niche) count.set(c.niche, (count.get(c.niche) || 0) + 1); });
-    const opt = (v, l) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
-    const groups = Taxonomy.INDUSTRIES.map(ind => {
-      const niches = Taxonomy.NICHES.filter(n => n.industry === ind && count.has(n.niche));
-      if (!niches.length) return '';
-      const total = niches.reduce((a, n) => a + count.get(n.niche), 0);
-      return `<optgroup label="${esc(ind)}">${opt('i:' + ind, `All ${ind} (${total})`)}${niches.map(n => opt('n:' + n.niche, `${n.niche} (${count.get(n.niche)})`)).join('')}</optgroup>`;
-    }).join('');
-    const rest = [...new Set(state.companies.filter(c => !c.niche).map(c => c.sector).filter(Boolean))].sort();
-    const html = `<option value="">All industries</option>${groups}${rest.length ? `<optgroup label="No niche yet (own sector label)">${rest.map(s => opt(s, s)).join('')}</optgroup>` : ''}`;
+    const html = clsFilterHtml($('#filterSector').value);
     if ($('#filterSector')._html !== html) { $('#filterSector').innerHTML = html; $('#filterSector')._html = html; }
   }
   fill('#filterOwnership', [...new Set(state.companies.map(c => Engine.ownershipType(c.ownership)).filter(Boolean))].sort(), 'Any ownership');
@@ -478,7 +525,9 @@ $('#bulkEnrich').addEventListener('click', () => startResearch([...state.picked]
 $('#bulkPeople').addEventListener('click', () => apolloBulk([...state.picked]));
 
 // Descriptions written by Claude Code from the data in your own lists (no web research).
-async function importDescriptions(items) {
+// Version 2 items may also carry investor_type, buy_box, fund, sponsor_name, parent_name, hq_city, founded, niche,
+// acquisition_focus, target_sectors and target_countries (read from the descriptions); they only fill blanks.
+async function importDescriptions(items, meta = {}) {
   const idx = Engine.buildIndex(state.companies);
   let n = 0;
   for (const it of items || []) {
@@ -487,6 +536,8 @@ async function importDescriptions(items) {
     if (it.short_description && !c.enrichment?.short_description) c.short_description = it.short_description;
     if (it.summary) c.summary = it.summary;
     if (it.tags?.length) c.tags = [...new Set([...(c.tags || []), ...it.tags.map(t => String(t).toLowerCase())])];
+    Enricher.applyFacts(c, it, { at: meta.created || new Date().toISOString(), src: 'own data (Claude)', level: 0 });
+    if (Enricher.isFinancial({ investor_type: it.investor_type }) && (!c.role || c.role_auto)) { c.role = 'Investor'; c.role_auto = false; }
     touch(c);
     n++;
   }
@@ -518,23 +569,28 @@ $('#bulkResearchExport').addEventListener('click', () => {
   toast(`Exported ${companies.length} companies. Give this file to Claude Code and ask it to research them.`, 7000);
 });
 
+// Several research files can be selected at once (e.g. all id-res-*.json of a round); they're imported one by one.
 $('#importResearch').addEventListener('change', async e => {
-  const f = e.target.files[0];
+  const files = [...e.target.files];
   e.target.value = '';
-  if (!f) return;
+  for (const f of files) await importResearchFile(f);
+});
+async function importResearchFile(f) {
   try {
     const d = JSON.parse(await f.text());
     const items = Array.isArray(d) ? d : d.companies;
-    if (d.type === 'mna-crm-descriptions') return importDescriptions(items);
+    if (d.type === 'mna-crm-descriptions') return importDescriptions(items, d);
     if (d.type === 'mna-crm-people') return importPeopleFile(d);
     if (d.type === 'mna-crm-acquisitions') return importAcquisitions(d);
     if (!Array.isArray(items) || !items.some(x => x.profile)) throw new Error('This is not a research results file.');
     const idx = Engine.buildIndex(state.companies);
     let updated = 0, added = 0, skipped = 0;
+    const done = [];
     for (const it of items) {
       if (!it.profile || !it.name) { skipped++; continue; }
       let c = (it.id && byId(it.id)) || Engine.findDuplicates({ name: it.name, website: it.website || it.profile.website }, idx).exact[0];
       if (!c) { c = newCompany(it.name); state.companies.push(c); Engine.indexAdd(idx, c); added++; } else updated++;
+      done.push(c);
       Enricher.apply(c, it.profile, { at: it.researched_at || d.created || new Date().toISOString(), model: d.model || 'Claude Code (subscription)', usd: 0, searches: it.searches || 0 });
       // Research that confirms the type ("type: Financial" in notes) replaces a guessed type, never one you set yourself.
       const type = String(it.profile.notes || '').match(/^type:\s*(strategic|financial)/i)?.[1];
@@ -543,11 +599,13 @@ $('#importResearch').addEventListener('change', async e => {
       touch(c);
     }
     await flush();
+    // Deal values and target headcounts found by research also complete the transaction database.
+    const tx = typeof syncResearchToTransactions === 'function' ? await syncResearchToTransactions(done) : null;
     renderCompanies();
     if (state.drawer) renderDrawer();
-    toast(`Research imported: ${updated} updated${added ? `, ${added} new` : ''}${skipped ? `, ${skipped} skipped` : ''}.`, 7000);
-  } catch (err) { toast('Could not import research: ' + err.message, 7000); }
-});
+    toast(`${f.name}: ${updated} updated${added ? `, ${added} new` : ''}${skipped ? `, ${skipped} skipped` : ''}${tx && (tx.added || tx.updated) ? ` · transactions: ${tx.added} new, ${tx.updated} completed` : ''}.`, 7000);
+  } catch (err) { toast(`Could not import ${f.name}: ${err.message}`, 7000); }
+}
 
 // ---------- Duplicate review ----------
 // Groups records of the same company from different lists. Merging is lossless: contacts and project history are
@@ -687,6 +745,29 @@ $('#downloadTemplate').addEventListener('click', () => {
 });
 
 // ---------- Company profile (drawer) ----------
+const INVESTOR_TYPE_LABEL = { buyout: 'Buyout PE', growth: 'Growth equity', vc: 'Venture capital', family_office: 'Family office', search_fund: 'Search fund', holdco_serial: 'Serial acquirer / holdco', corporate_vc: 'Corporate VC', strategic: 'Strategic', pe_backed_platform: 'PE-backed platform' };
+const DEAL_TYPE_LABEL = { platform: 'Platform', add_on: 'Add-on', majority: 'Majority', minority: 'Minority', growth: 'Growth', carve_out: 'Carve-out' };
+// Acquisition criteria: the structured buy box (data model v2) plus the older free-text fields and fund data.
+function buyBoxHtml(c, fact) {
+  const b = c.buy_box || {}, f = c.fund || {};
+  const range = (lo, hi) => (lo != null || hi != null ? `€${lo != null ? Engine.fmt(lo) : '0'}–${hi != null ? Engine.fmt(hi) : '∞'}m` : '');
+  const rows = [
+    fact('Enterprise value', range(b.ev_min, b.ev_max)),
+    fact('Target revenue', range(b.rev_min ?? c.min_revenue, b.rev_max ?? c.max_revenue)),
+    fact('Min EBITDA', b.ebitda_min != null ? `€${Engine.fmt(b.ebitda_min)}m` : ''),
+    fact('Equity ticket', range(b.ticket_min, b.ticket_max)),
+    fact('Must be profitable', b.profitable_required || ''),
+    fact('Stake', esc(b.stake || '')),
+    fact('Deal types', (b.deal_types || []).map(x => `<span class="chip">${esc(DEAL_TYPE_LABEL[x] || x)}</span>`).join(' ')),
+    fact('Business models', esc((b.business_models || []).join(', '))),
+    fact('Sectors', esc(c.target_sectors || (b.niches || []).join('; '))),
+    fact('Countries', esc(c.target_countries || (b.countries || []).join('; '))),
+    fact('AUM', f.aum != null ? `€${Engine.fmt(f.aum)}m` : ''),
+    fact('Current fund', esc([f.current_fund, f.fund_size != null && `€${Engine.fmt(f.fund_size)}m`, f.vintage && `vintage ${f.vintage}`, f.close_date && `closed ${f.close_date}`].filter(Boolean).join(' · '))),
+  ].join('');
+  if (!rows) return '';
+  return `<h3>Acquisition criteria${b.source ? ` <span class="muted small">(${esc(b.source)}${b.as_of ? ', ' + esc(b.as_of) : ''})</span>` : ''}</h3><div class="facts">${rows}</div>${b.notes ? `<p class="small muted">${esc(b.notes)}</p>` : ''}`;
+}
 // "What this buyer buys", from its deal history: used by Find buyers for fit, geography and size.
 function buyerProfileHtml(c, compact = false) {
   const p = Engine.acquisitionProfile(c);
@@ -699,7 +780,7 @@ function buyerProfileHtml(c, compact = false) {
     ${p.tags.length ? `<div class="bp-row"><span class="muted small">Topics</span><div class="chips">${chips(p.tags.slice(0, compact ? 6 : 12), 'blue')}</div></div>` : ''}
     ${p.countries.length ? `<div class="bp-row"><span class="muted small">Countries</span><div class="chips">${chips(p.countries.slice(0, compact ? 4 : 8))}</div></div>` : ''}
     ${size ? `<div class="bp-row"><span class="muted small">Deal sizes</span><div class="small">${size}</div></div>` : ''}
-    <div class="bp-row"><span class="muted small">Activity</span><div class="small">${p.n} acquisitions · ${p.recent} in the last 5 years${p.last ? ` · last ${p.last}` : ''}</div></div></div>`;
+    <div class="bp-row"><span class="muted small">Activity</span><div class="small">${p.n} acquisitions · ${p.last12} in the last 12 months · ${p.last36} in 36 months${p.last ? ` · last ${p.last}` : ''}</div></div></div>`;
 }
 
 // Acquisitions tab: a short summary, what they buy (niches you can filter on), deals per year, and one deal table.
@@ -775,14 +856,14 @@ function closeDrawer() {
 $('#drawerBackdrop').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.drawer && !document.querySelector('dialog[open]')) closeDrawer(); });
 
-// Setting a niche by hand fixes it (niche_auto off); "Auto" lets the taxonomy derive it again.
+// Classification set by hand on the company page is kept (cls_src "user", niche_auto off); clearing the industry lets
+// the taxonomy derive it again.
 document.addEventListener('change', e => {
-  const id = e.target.dataset?.niche;
-  if (!id) return;
-  const c = byId(id);
+  const level = e.target.dataset?.ccls;
+  if (!level) return;
+  const c = byId(e.target.dataset.id);
   if (!c) return;
-  if (e.target.value) Object.assign(c, { niche: e.target.value, industry: Taxonomy.industryOf(e.target.value), niche_auto: false });
-  else { delete c.niche; delete c.industry; c.niche_auto = true; }
+  applyClsChange(c, level, e.target.value);
   touch(c);
   renderDrawer();
   renderCompanies();
@@ -808,19 +889,21 @@ function renderDrawer() {
       ${(e?.long_description || c.summary) && c.description && c.description !== (e?.long_description || c.summary) ? `<details class="small" style="margin-top:8px"><summary>Original description from your lists</summary><p class="prose">${esc(c.description)}</p></details>` : ''}
       <div class="facts">
         ${fact('Type', c.role && roleChip(c.role) + (c.role_auto ? ' <span class="muted small">(auto)</span>' : ''))}
-        ${fact('Industry / niche', `<select data-niche="${c.id}" class="niche-select"><option value="">${c.niche_auto || !c.niche ? 'Auto' : 'Auto (clear)'}</option>${Taxonomy.INDUSTRIES.map(ind => `<optgroup label="${esc(ind)}">${Taxonomy.NICHES.filter(n => n.industry === ind).map(n => `<option ${n.niche === c.niche ? 'selected' : ''}>${esc(n.niche)}</option>`).join('')}</optgroup>`).join('')}</select>
-          <div class="muted small">${esc(c.industry || 'No niche found')}${c.niche_auto ? ' · auto' : c.niche ? ' · set by you' : ''}${Engine.nichesOf(c).length > 1 ? ` · also ${esc(Engine.nichesOf(c).slice(1, 3).map(n => n.niche).join(', '))}` : ''}</div>`)}
+        ${(() => { const p = Taxonomy.pathOfCompany(c); const how = !p ? 'Not classified yet' : p.src === 'user' || (c.niche && c.niche_auto === false && p.src === 'niche') ? 'set by you' : p.src === 'research' ? 'from research' : p.src === 'niche' ? 'from its texts (auto)' : p.src === 'type' ? 'investor' : p.src === 'label' ? 'from its industry label' : 'set';
+          return fact('Industry › sector › sub-sector › niche', `${clsEditorHtml(p, 'data-ccls', c.id)}
+          <div class="muted small">${esc(how)}${Engine.nichesOf(c).length > 1 ? ` · also ${esc(Engine.nichesOf(c).slice(1, 3).map(n => n.niche).join(', '))}` : ''}</div>`); })()}
         ${fact('Sector (source label)', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
         ${fact('Ownership', esc(c.ownership))}
+        ${fact('Investor type', esc(INVESTOR_TYPE_LABEL[c.investor_type] || ''))}
+        ${fact('PE / VC owner', c.sponsor_name ? `${c.sponsor_id && byId(c.sponsor_id) ? `<button class="link" data-open="${esc(c.sponsor_id)}">${esc(c.sponsor_name)}</button>` : esc(c.sponsor_name)}${c.sponsor_since ? ` <span class="muted small">since ${esc(c.sponsor_since)}</span>` : ''}` : '')}
+        ${fact('Parent', c.parent_name ? (c.parent_id && byId(c.parent_id) ? `<button class="link" data-open="${esc(c.parent_id)}">${esc(c.parent_name)}</button>` : esc(c.parent_name)) : '')}
         ${fact('Employees (total)', c.employees != null && c.linkedin_employees != null ? Engine.fmt(c.employees) : '')}
         ${fact('On LinkedIn', c.linkedin_employees_text ? esc(c.linkedin_employees_text) : '')}
         ${fact('Acquisitive', e?.is_acquisitive && e.is_acquisitive !== 'unknown' ? esc(e.is_acquisitive) : '')}
         ${fact('Ticker', esc(c.ticker))}
         ${fact('CRM status', esc(c.status))}
       </div>
-      ${c.target_sectors || c.target_countries || c.min_revenue != null || c.max_revenue != null ? `<h3>Acquisition criteria</h3><div class="facts">
-        ${fact('Sectors', esc(c.target_sectors))}${fact('Countries', esc(c.target_countries))}
-        ${fact('Revenue range', c.min_revenue != null || c.max_revenue != null ? `€${c.min_revenue ?? 0}–${c.max_revenue ?? '∞'}m` : '')}</div>` : ''}
+      ${buyBoxHtml(c, fact)}
       ${(c.acquisitions || []).length || c.acquisition_focus ? `<h3>What they buy ${(c.acquisitions || []).length ? `<button class="link small" data-dtab="acquisitions">all ${c.acquisitions.length} deals →</button>` : ''}</h3>${buyerProfileHtml(c, true)}` : ''}
       ${c.projects.length ? `<h3>Track record with us</h3><div class="chips">${c.projects.map(p => `<span class="chip ${STAGE_CHIP[Engine.stageGroup(p.status)]}">${esc(p.project)}: ${esc(p.status || 'Not approached')}</span>`).join('')}</div>
         ${c.projects.filter(p => p.rationale).map(p => `<p class="small"><b>Why it fits ${esc(p.project)}:</b> ${esc(p.rationale)}</p>`).join('')}` : ''}
@@ -874,6 +957,7 @@ function renderDrawer() {
     metric('Revenue', money(c, c.revenue)),
     metric('EBITDA', money(c, c.ebitda)),
     metric('Employees', emp != null ? Engine.fmt(emp) : ''),
+    ...(c.revenue > 0 && emp > 0 ? [metric('Revenue / employee', `${money(c, (c.revenue * 1000) / emp).replace(/m$/, '')}k${c.ebitda != null ? ` <span class="muted small">· EBITDA ${money(c, (c.ebitda * 1000) / emp).replace(/m$/, '')}k</span>` : ''}`)] : []),
     metric('Acquisitions', acqN ? `${acqN}${lastDeal ? ` <span class="muted small">· last ${esc(lastDeal)}</span>` : ''}` : ''),
     metric('Founded', esc(c.founded || '')),
     metric('Headquarters', esc([c.hq_city, c.country].filter(Boolean).join(', '))),

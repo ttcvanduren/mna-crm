@@ -1,4 +1,4 @@
-/* global Engine, state, byId, esc, logo, roleChip, money, openDrawer, saveShared, uid, toast, touch, flush, downloadSheet, slug, showTab, norm, ago */
+/* global Engine, Taxonomy, state, byId, esc, logo, roleChip, money, openDrawer, saveShared, uid, toast, touch, flush, downloadSheet, slug, showTab, norm, ago, clsEditorHtml, applyClsChange */
 // Projects: one record per mandate (e.g. Lakeside for Inovoo). Companies link to it through company.projects[].project.
 const STAGE_COLORS = { 'Not approached': '#98a2b3', Approached: '#1d4ed8', Engaged: '#067647', Passed: '#b42318', Other: '#b54708' };
 const STAGE_CHIP = { 'Not approached': '', Approached: 'blue', Engaged: 'green', Passed: 'red', Other: 'amber' };
@@ -251,14 +251,31 @@ function openProjectDialog(name) {
     </div>
     <h3>Deal profile: the company you're selling</h3>
     <p class="muted small">Used by <b>Find buyers</b>, the valuation and the email placeholders ({{deal_sector}}, {{deal_country}}, {{deal_revenue}}…).</p>
+    <label class="full">Industry › sector › sub-sector › niche <span class="muted small">(Find buyers ranks on these levels; leave empty to derive them from the description)</span>
+      <div id="pdCls"></div></label>
     <div class="form-grid">
       ${TARGET_FIELDS.map(([k, label, ph]) => `<label class="${k === 'description' || k === 'keywords' ? 'full' : ''}">${label}${k === 'description'
         ? `<textarea name="t_${k}" rows="4" placeholder="${esc(ph)}">${esc(p.target?.[k] ?? '')}</textarea>`
         : `<input name="t_${k}" value="${esc(p.target?.[k] ?? '')}" placeholder="${esc(ph)}">`}</label>`).join('')}
     </div>
     <div class="toolbar"><span class="spacer"></span><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Save</button></div>`;
+  const t = p.target || {};
+  dlg._cls = { cls_industry: t.cls_industry || '', cls_sector: t.cls_sector || '', cls_subsector: t.cls_subsector || '', niche: t.niche || '', niche_auto: !t.niche };
+  renderProjectCls();
   dlg.showModal();
 }
+// The deal profile's classification: linked selects plus hidden fields that the form saves.
+function renderProjectCls() {
+  const o = $('#projectDialog')._cls, p = o.cls_industry || o.niche ? Taxonomy.pathOfCompany(o) : null;
+  $('#pdCls').innerHTML = clsEditorHtml(p, 'data-pcls', 'deal') +
+    ['cls_industry', 'cls_sector', 'cls_subsector', 'niche'].map(k => `<input type="hidden" name="t_${k}" value="${esc(k === 'niche' ? (o.niche_auto ? '' : o.niche || '') : o[k] || '')}">`).join('');
+}
+document.addEventListener('change', e => {
+  const level = e.target.dataset?.pcls;
+  if (!level) return;
+  applyClsChange($('#projectDialog')._cls, level, e.target.value);
+  renderProjectCls();
+});
 $('#projectDialog').addEventListener('close', () => {
   const dlg = $('#projectDialog');
   if (dlg.returnValue !== 'save') return;

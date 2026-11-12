@@ -221,6 +221,10 @@ tr.sel { background: var(--accent-soft) !important; }
 .fact { border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
 .fact .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .fact .v { font-weight: 600; margin-top: 2px; overflow-wrap: anywhere; }
+/* Industry › sector › sub-sector › niche selects (company page, deal profiles) */
+.fact:has(.cls-edit) { grid-column: 1 / -1; }
+.cls-edit { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+.cls-edit select { font-size: 13px; font-weight: 400; padding: 4px 8px; max-width: 100%; }
 .lead { font-size: 15px; font-weight: 500; line-height: 1.5; margin: 0 0 8px; }
 .prose { line-height: 1.6; white-space: pre-wrap; margin: 0; }
 .people { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }

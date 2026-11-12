@@ -37,9 +37,10 @@ let pbMemo = { sig: null }, pbMatch = { sig: null };
 function pitchDeal(p) {
   const T = p.cs.target;
   return { id: 'pitch:' + p.id, role: 'Target', currency: 'EUR', name: T.name, website: T.website, sector: T.sector, subsector: T.subsector, country: T.country,
-    revenue: T.revenue ?? T.arr, ebitda: T.ebitda, employees: T.employees, description: [T.description, T.customers].filter(Boolean).join(' '), keywords: T.tags.join('; ') };
+    revenue: T.revenue ?? T.arr, ebitda: T.ebitda, employees: T.employees, description: [T.description, T.customers].filter(Boolean).join(' '), keywords: T.tags.join('; '),
+    cls_industry: T.cls_industry || '', cls_sector: T.cls_sector || '', cls_subsector: T.cls_subsector || '', niche: T.niche || '' };
 }
-const pitchProfileSig = p => { const T = p.cs.target; return JSON.stringify([T.description, T.customers, T.tags, T.sector, T.subsector, T.country, T.revenue, T.arr, T.ebitda, T.employees, state.companies.length]); };
+const pitchProfileSig = p => { const T = p.cs.target; return JSON.stringify([T.description, T.customers, T.tags, T.sector, T.subsector, T.cls_industry, T.cls_sector, T.cls_subsector, T.niche, T.country, T.revenue, T.arr, T.ebitda, T.employees, state.companies.length]); };
 // Every CRM company scored by the match engine, plus the acquirers of the selected comparable deals (a strong signal, also when they're not in the CRM).
 function pitchCandidates(p, sel) {
   const T = p.cs.target, used = sel?.used || [];

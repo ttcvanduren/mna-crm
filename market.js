@@ -1,11 +1,14 @@
-/* global state, esc, Engine, $, showTab, renderComps, cf, stat, mult, usdm, isDead, bigRegion, splitBuyers, percentile, dealOf, toast */
+/* global state, esc, Engine, Taxonomy, $, showTab, renderComps, cf, stat, mult, usdm, isDead, bigRegion, splitBuyers, percentile, dealOf, toast */
 // Market heat map: which segments are hot, what is being bought right now, by whom and at what multiples.
 // Momentum compares a segment's SHARE of all deals in the last 12 months with its share in the 24 months before,
 // so it isn't distorted by how many deals a given export happens to contain per year.
 
-const mk = { dim: 'tags', region: '', buyer: '', sort: 'heat', min: 8, open: null };
+const mk = { dim: 'subsector', region: '', buyer: '', sort: 'heat', min: 8, open: null };
 const MONTH = 30.44 * 864e5;
-const segmentsOf = (t, dim) => dim === 'industry' ? [t.industry].filter(Boolean)
+// Segments: sub-sector / niche from the taxonomy (stored on each deal once derived), the S&P industry label, country or S&P topic tags.
+const segmentsOf = (t, dim) => dim === 'subsector' ? [Taxonomy.pathOfDeal(t)?.subsector].filter(Boolean)
+  : dim === 'niche' ? [Taxonomy.pathOfDeal(t)?.niche].filter(Boolean)
+  : dim === 'industry' ? [t.industry].filter(Boolean)
   : dim === 'country' ? [t.country].filter(Boolean)
   : String(t.tags || '').split(/,\s*/).filter(x => x && !/^(software development|enterprise software as a service \(saas\))$/i.test(x));
 
@@ -108,7 +111,7 @@ function renderMarket() {
   const pulse = projectPulse(d);
   const th = (k, label) => `<th class="num sortable ${mk.sort === k ? 'on' : ''}" data-mksort="${k}">${label}${mk.sort === k ? ' ↓' : ''}</th>`;
   el.innerHTML = `<div class="page-head"><div><h1>Market heat map</h1><div class="muted">${d.deals.length.toLocaleString()} deals · latest ${monthName(d.end)} · last 12 months vs the 24 months before</div></div>
-      <div class="actions"><select id="mkDim"><option value="tags" ${mk.dim === 'tags' ? 'selected' : ''}>By topic (S&P tags)</option><option value="industry" ${mk.dim === 'industry' ? 'selected' : ''}>By industry</option><option value="country" ${mk.dim === 'country' ? 'selected' : ''}>By target country</option></select>
+      <div class="actions"><select id="mkDim"><option value="subsector" ${mk.dim === 'subsector' ? 'selected' : ''}>By sub-sector</option><option value="niche" ${mk.dim === 'niche' ? 'selected' : ''}>By niche</option><option value="tags" ${mk.dim === 'tags' ? 'selected' : ''}>By topic (S&P tags)</option><option value="industry" ${mk.dim === 'industry' ? 'selected' : ''}>By S&P industry label</option><option value="country" ${mk.dim === 'country' ? 'selected' : ''}>By target country</option></select>
         <select id="mkRegion"><option value="">All regions</option>${regions.map(r => `<option ${r === mk.region ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select>
         <label class="row-label small">Min. deals <input id="mkMin" value="${mk.min}" style="width:46px"></label></div></div>
     <div class="kpis">
@@ -124,7 +127,7 @@ function renderMarket() {
       <div class="card"><h2>Your mandates in the market</h2>${pulse.length ? pulse.map(p => `<div class="mk-pulse"><div><b>${esc(p.name)}</b> ${heatBadge(p.m)}</div><div class="small">${p.L} deals in the space last 12 months (${p.P} in the 24 before) · median ${mult(p.evr.median)} EV/Rev</div>${p.buyers.length ? `<div class="small muted">Active: ${p.buyers.map(([b]) => esc(b)).join(', ')}</div>` : ''}</div>`).join('') : '<p class="muted small">Add keywords to a project\'s deal profile to see how its market is moving.</p>'}
         <h2 style="margin-top:14px">Strategic vs financial</h2><div class="mk-fin">${(() => { const top = Math.max(0.01, ...d.finYear.map(y => y.fin)); return d.finYear.map(y => `<div title="${y.y}: ${Math.round(y.fin * 100)}% financial of ${y.n} deals"><b>${Math.round(y.fin * 100)}%</b><i style="height:${Math.round((y.fin / top) * 100)}%"></i><span>${String(y.y).slice(2)}</span></div>`).join(''); })()}</div><div class="muted small">Share of deals with a financial buyer (PE / funds), per year.</div></div>
     </div>
-    <div class="table-wrap"><table class="data heat"><thead><tr><th>${mk.dim === 'tags' ? 'Topic' : mk.dim === 'industry' ? 'Industry' : 'Country'}</th><th>Trend</th>
+    <div class="table-wrap"><table class="data heat"><thead><tr><th>${({ tags: 'Topic', industry: 'S&P industry', subsector: 'Sub-sector', niche: 'Niche' })[mk.dim] || 'Country'}</th><th>Trend</th>
         ${d.years.map(y => `<th class="num">${y}${y === d.years[d.years.length - 1] ? '*' : ''}</th>`).join('')}
         ${th('volume', '12m deals')}${th('heat', 'Heat')}${th('momentum', 'Momentum')}${th('pe', 'PE share')}${th('evr', 'EV/Rev')}<th class="num">Deal size</th><th>Top buyers (12m)</th></tr></thead><tbody>
       ${rows.map(r => { const mx = yearMax(r); return `<tr class="mk-row ${mk.open === r.k ? 'open' : ''}" data-mkopen="${esc(r.k)}"><td><b>${esc(r.k)}</b></td><td>${heatBadge(r.momentum)}</td>
@@ -142,7 +145,10 @@ document.addEventListener('click', e => {
   const go = e.target.closest('[data-mk="comps"]');
   if (go) {
     Object.assign(cf, { q: '', industry: '', limit: 200, open: null });
-    if (mk.dim === 'industry') cf.industry = go.dataset.k; else cf.q = go.dataset.k;
+    if (mk.dim === 'subsector') cf.industry = 'U:' + go.dataset.k;
+    else if (mk.dim === 'niche') cf.industry = 'n:' + go.dataset.k;
+    else if (mk.dim === 'industry') cf.industry = 'l:' + go.dataset.k;
+    else cf.q = go.dataset.k;
     return showTab('comps');
   }
   const open = e.target.closest('[data-mkopen]')?.dataset.mkopen;

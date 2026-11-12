@@ -1,4 +1,4 @@
-/* global clip, state, esc, $, Engine, Enricher, toast, today, eur, mult, usdm, stat, percentile, med, isDead, txRegion, EUROPE, splitBuyers, compareTx, phrasesOf, words, FX, crmIndex, txDetail, renderComps, cf, dealOf, buyerTypeIndex, XLSX */
+/* global clip, state, esc, $, Engine, Enricher, Taxonomy, clsEditorHtml, applyClsChange, toast, today, eur, mult, usdm, stat, percentile, med, isDead, txRegion, EUROPE, splitBuyers, compareTx, phrasesOf, words, FX, crmIndex, txDetail, renderComps, cf, dealOf, buyerTypeIndex, XLSX, perEmployee */
 // Comp set builder: value one company against the transactions database. The target comes from its website (Claude) or the CRM,
 // filters and single deals can be included or excluded, and the result exports as PDF slides or an Excel workbook.
 
@@ -39,11 +39,12 @@ function csRegionOk(t, r) {
 }
 function csRanked() {
   const T = cs.target, f = cs.f;
-  const sig = JSON.stringify([T.description, T.tags, T.sector, T.subsector, T.country, T.revenue, T.arr, T.employees, f.years, f.region, f.minSize, f.maxSize, f.buyer, f.done, f.minority, f.needMult, f.noMined, f.must, f.exclude, state.transactions.length]);
+  const sig = JSON.stringify([T.description, T.tags, T.sector, T.subsector, T.cls_industry, T.cls_sector, T.cls_subsector, T.niche, T.country, T.revenue, T.arr, T.employees, f.years, f.region, f.minSize, f.maxSize, f.buyer, f.done, f.minority, f.needMult, f.noMined, f.must, f.exclude, state.transactions.length]);
   if (csMemo.sig === sig) return csMemo;
   const kw = T.tags.join('; ');
   const profile = { revenue: T.revenue || T.arr, employees: T.employees, country: T.country, keywords: kw, description: T.description };
-  const prep = { phrases: phrasesOf([kw, T.subsector].filter(Boolean).join('; ')), words: words([T.description, kw, T.sector, T.subsector].join(' ')), segments: phrasesOf([T.sector, T.subsector].filter(Boolean).join('/')) };
+  const prep = { phrases: phrasesOf([kw, T.subsector].filter(Boolean).join('; ')), words: words([T.description, kw, T.sector, T.subsector].join(' ')), segments: phrasesOf([T.sector, T.subsector].filter(Boolean).join('/')),
+    path: Engine.dealPath({ ...profile, sector: T.sector, subsector: T.subsector, tags: T.tags, cls_industry: T.cls_industry, cls_sector: T.cls_sector, cls_subsector: T.cls_subsector, niche: T.niche }) };
   const minYear = f.years ? new Date().getFullYear() - Number(f.years) + 1 : 0;
   const must = csTerms(f.must), not = csTerms(f.exclude);
   const typeOf = f.buyer !== 'all' ? csIndex().typeOf : null;
@@ -95,10 +96,14 @@ function csSelection() {
   if (T.revenue > 0 && rev.n >= 3) methods.push({ k: 'rev', label: 'EV / Revenue × revenue', short: 'EV/Revenue', metric: T.revenue, s: rev });
   if (T.arr > 0 && rev.n >= 3) methods.push({ k: 'arr', label: 'EV / Revenue × ARR', short: 'EV/ARR', metric: T.arr, s: rev });
   if (T.ebitda > 0 && ebitda.n >= 3) methods.push({ k: 'ebitda', label: 'EV / EBITDA × EBITDA', short: 'EV/EBITDA', metric: T.ebitda, s: ebitda });
+  // Revenue and EBITDA per employee in the comparable deals (USD k); without revenue, a headcount implies one (EUR m).
+  const pe = perEmployee(used.map(x => x.t));
+  const impliedRev = !(T.revenue > 0) && !(T.arr > 0) && T.employees > 0 && pe.rev.n >= 3 ? Math.round(((T.employees * pe.rev.median) / 1000 / FX.EUR) * 10) / 10 : null;
+  if (impliedRev && rev.n >= 3) methods.push({ k: 'emp', label: `EV / Revenue × revenue implied by ${Engine.fmt(T.employees)} employees (€${Engine.fmt(impliedRev)}m)`, short: 'EV/Rev (headcount)', metric: impliedRev, s: rev });
   for (const x of methods) { x.on = cs.methods[x.k] !== false; x.range = [x.s.p25, x.s.median, x.s.p75].map(q => q * factor * x.metric); }
   const on = methods.filter(x => x.on);
   const blend = on.length ? [0, 1, 2].map(i => on.reduce((a, x) => a + x.range[i], 0) / on.length) : null;
-  return { m, used, rev, ebitda, next, excluded, methods, blend, factor };
+  return { m, used, rev, ebitda, next, excluded, methods, blend, factor, pe, impliedRev };
 }
 
 const CS_SORT = {
@@ -295,6 +300,8 @@ function renderCompSet() {
         <div class="toolbar"><input data-cst="website" value="${esc(T.website)}" placeholder="Website, e.g. acme-software.nl" style="flex:1;min-width:200px"><button class="btn primary" data-csx="read">Read website</button>
           <select id="csProj"><option value="">Load a project…</option>${state.projects.map(p => `<option>${esc(p.name)}</option>`).join('')}</select></div>
         ${crm && crm.name !== T.name ? `<div class="cs-note">In your CRM: <b>${esc(crm.name)}</b> <button class="link" data-csx="fromcrm">fill from it</button> <button class="chip blue" data-open="${crm.id}">open</button></div>` : ''}
+        <div class="small muted" style="margin:6px 0 2px">Industry › sector › sub-sector › niche <span class="muted">(ranks the comparable deals; empty = derived from the description)</span></div>
+        ${clsEditorHtml(T.cls_industry || T.niche ? Taxonomy.pathOfCompany(T) : Engine.dealPath({ sector: T.sector, subsector: T.subsector, description: T.description, tags: T.tags }), 'data-cscls', 'cs')}
         <div class="cs-fields">
           <label>Name<input data-cst="name" value="${esc(T.name)}" placeholder="Company or codename"></label>
           <label>Country<input data-cst="country" value="${esc(T.country)}" placeholder="Netherlands"></label>
@@ -340,7 +347,8 @@ function csResultHtml(s, mix, th) {
       <div class="kpi"><div class="k">Comparable deals</div><div class="v">${s.used.length}</div><div class="muted small">of ${s.m.pool.toLocaleString()} that pass the filters</div></div>
       <div class="kpi"><div class="k">Median EV/Revenue</div><div class="v">${mult(s.rev.median)}</div><div class="muted small">P25–P75 ${mult(s.rev.p25)}–${mult(s.rev.p75)} · n=${s.rev.n}</div></div>
       <div class="kpi"><div class="k">Median EV/EBITDA</div><div class="v">${mult(s.ebitda.median)}</div><div class="muted small">P25–P75 ${mult(s.ebitda.p25)}–${mult(s.ebitda.p75)} · n=${s.ebitda.n}</div></div>
-      <div class="kpi"><div class="k">Implied EV (mid)</div><div class="v">${s.blend ? eur(s.blend[1]) : '–'}</div><div class="muted small">${s.blend ? `${eur(s.blend[0])} – ${eur(s.blend[2])}` : 'add revenue, ARR or EBITDA'}</div></div>
+      <div class="kpi"><div class="k">Implied EV (mid)</div><div class="v">${s.blend ? eur(s.blend[1]) : '–'}</div><div class="muted small">${s.blend ? `${eur(s.blend[0])} – ${eur(s.blend[2])}` : 'add revenue, ARR, EBITDA or employees'}</div></div>
+      ${s.pe.rev.n ? `<div class="kpi"><div class="k">Revenue / employee</div><div class="v">$${Engine.fmt(s.pe.rev.median)}k</div><div class="muted small">P25–P75 $${Engine.fmt(s.pe.rev.p25)}k–$${Engine.fmt(s.pe.rev.p75)}k · n=${s.pe.rev.n}${s.pe.ebitda.n >= 3 ? ` · EBITDA $${Engine.fmt(s.pe.ebitda.median)}k` : ''}${s.impliedRev ? ` · implies €${Engine.fmt(s.impliedRev)}m revenue` : ''}</div></div>` : ''}
     </div>
     <div class="comps-grid">
       <div class="card span2"><div class="toolbar" style="margin-bottom:4px"><h2 style="margin:0">Valuation</h2><span class="spacer"></span>
@@ -549,6 +557,7 @@ document.addEventListener('change', e => {
   if (el.id === 'csProj') { if (el.value) csFromProject(el.value); return csRedraw(); }
   if (el.id === 'csTagAdd') { cs.target.tags = [...new Set([...cs.target.tags, ...el.value.split(/[;,]+/).map(x => x.trim()).filter(Boolean)])]; return csRedraw(); }
   if (d.cst) { cs.target[d.cst] = d.num ? Engine.parseNumber(el.value) : el.value.trim(); if (d.cst === 'website' || d.cst === 'description') { cs.pin = []; } return csRedraw(); }
+  if (d.cscls) { const T = cs.target; applyClsChange(T, d.cscls, el.value, T.cls_industry || T.niche ? null : Engine.dealPath({ sector: T.sector, subsector: T.subsector, description: T.description, tags: T.tags })); return csRedraw(); }
   if (d.csf) { cs.f[d.csf] = el.type === 'checkbox' ? el.checked : el.value.trim() === '' ? '' : /^(years|n|minFit)$/.test(d.csf) ? Number(el.value) || 0 : el.value.trim(); return csRedraw(); }
   if (d.csm) { cs.methods[d.csm] = el.checked; return csRedraw(); }
   if (d.css) { cs.sections[d.css] = el.checked; return csSave(); }
