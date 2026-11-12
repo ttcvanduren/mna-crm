@@ -113,7 +113,7 @@ const CS_SORT = {
 const csSorted = used => [...used].sort(CS_SORT[cs.sort] || CS_SORT.fit);
 
 // ---------- Charts (plain SVG with fixed colours, so they look the same on screen, in the PDF and in print) ----------
-const CC = { blue: '#1d4ed8', soft: '#c7d2fe', grey: '#98a2b3', faint: '#eef0f3', line: '#d0d5dd', text: '#14181f', muted: '#667085', red: '#b42318', amber: '#dc6803', green: '#067647' };
+const CC = { blue: '#2e5b8a', soft: '#cfdcea', grey: '#98a2b3', faint: '#eef0f3', line: '#d0d5dd', text: '#0f1b2d', muted: '#6b7484', red: '#b42318', amber: '#dc6803', green: '#067647' };
 const svgOpen = (w, h) => `<svg class="cs-svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="11">`;
 const yStep = max => (max <= 6 ? 1 : max <= 15 ? 2 : max <= 30 ? 5 : max <= 60 ? 10 : 20);
 
@@ -443,20 +443,20 @@ function csOpenDeck(slides, name, what) {
   const date = today();
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(name)} – ${esc(what)} ${date}</title><style>
     @page{size:297mm 167mm;margin:0}*{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-    body{margin:0;background:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;color:#14181f;font-size:11.5px}
-    .bar{position:sticky;top:0;background:#0f172a;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;z-index:2}.bar button{font:inherit;padding:6px 14px;border-radius:6px;border:0;background:#1d4ed8;color:#fff;cursor:pointer}
+    body{margin:0;background:#e5e7eb;font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f1b2d;font-size:11.5px}
+    .bar{position:sticky;top:0;background:#0f1b2d;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;z-index:2}.bar button{font:inherit;padding:6px 14px;border-radius:6px;border:0;background:#2e5b8a;color:#fff;cursor:pointer}
     .slide{width:297mm;height:167mm;margin:8mm auto;background:#fff;padding:11mm 13mm 12mm;position:relative;overflow:hidden;break-after:page;page-break-after:always;box-shadow:0 2px 8px rgba(0,0,0,.12);counter-increment:pg}
     .slide::after{content:"33 Equity · ${esc(name).replace(/"/g, '')} · ${date}    " counter(pg);position:absolute;left:13mm;right:13mm;bottom:5mm;font-size:9px;color:#98a2b3;text-align:right;white-space:pre}
-    .slide::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:#1d4ed8}
-    .hd{border-bottom:2px solid #eef0f3;margin-bottom:10px;padding-bottom:6px}.hd h2{margin:0;font-size:20px;color:#0f172a}.sub{color:#475467;margin-top:3px;font-size:12.5px}
-    .title{display:flex;flex-direction:column;justify-content:center;padding-left:22mm;background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff}.title::after{color:#cbd5e1}
-    .title h1{font-size:40px;margin:6px 0}.title .lead{font-size:20px;color:#c7d2fe}.title .meta{color:#cbd5e1;margin-top:6px;font-size:13px}.brand{letter-spacing:.2em;text-transform:uppercase;font-weight:700;color:#93c5fd}
+    .slide::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:#2e5b8a}
+    .hd{border-bottom:2px solid #eef0f3;margin-bottom:10px;padding-bottom:6px}.hd h2{margin:0;font-size:20px;color:#0f1b2d}.sub{color:#475467;margin-top:3px;font-size:12.5px}
+    .title{display:flex;flex-direction:column;justify-content:center;padding-left:22mm;background:linear-gradient(135deg,#0f1b2d,#1e3f63);color:#fff}.title::after{color:#cbd5e1}
+    .title h1{font-size:40px;margin:6px 0}.title .lead{font-size:20px;color:#cfdcea}.title .meta{color:#cbd5e1;margin-top:6px;font-size:13px}.brand{letter-spacing:.2em;text-transform:uppercase;font-weight:700;color:#d9b878}
     .row{display:flex;gap:16px}.col{flex:1;min-width:0}.col svg{max-width:100%;height:auto}
-    h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#667085;margin:8px 0 4px}
-    table{border-collapse:collapse;width:100%;margin:6px 0}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:9.5px;color:#667085;text-transform:uppercase}
-    .tx td{font-size:10.5px}.n{text-align:right;white-space:nowrap}.out{color:#dc6803}.muted{color:#667085}ul{margin:4px 0;padding-left:16px}li{margin:3px 0}
-    .kp{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px}.kp div{border:1px solid #e6e8ec;border-radius:8px;padding:8px;text-align:center}.kp span{display:block;font-size:9.5px;color:#667085;text-transform:uppercase}.kp b{font-size:18px}
-    .tier{display:inline-block;min-width:18px;text-align:center;border-radius:4px;font-weight:700;font-size:9.5px;padding:1px 4px;color:#fff;background:#1d4ed8}.tier.t2{background:#6941c6}.tier.t3{background:#98a2b3}
+    h3{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6b7484;margin:8px 0 4px}
+    table{border-collapse:collapse;width:100%;margin:6px 0}td,th{text-align:left;padding:4px 6px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:9.5px;color:#6b7484;text-transform:uppercase}
+    .tx td{font-size:10.5px}.n{text-align:right;white-space:nowrap}.out{color:#dc6803}.muted{color:#6b7484}ul{margin:4px 0;padding-left:16px}li{margin:3px 0}
+    .kp{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px}.kp div{border:1px solid #e6e8ec;border-radius:8px;padding:8px;text-align:center}.kp span{display:block;font-size:9.5px;color:#6b7484;text-transform:uppercase}.kp b{font-size:18px}
+    .tier{display:inline-block;min-width:18px;text-align:center;border-radius:4px;font-weight:700;font-size:9.5px;padding:1px 4px;color:#fff;background:#2e5b8a}.tier.t2{background:#6941c6}.tier.t3{background:#98a2b3}
     .lead-text{font-size:13px;line-height:1.55;color:#344054}.box{border:1px solid #e6e8ec;border-radius:8px;padding:10px 12px;margin-bottom:8px}
     @media print{body{background:#fff}.bar{display:none}.slide{margin:0;box-shadow:none}}
   </style></head><body><div class="bar"><b>${slides.length} slides</b><span>Print → Save as PDF. Layout landscape; margins none.</span><button onclick="print()">Print / save as PDF</button></div>${slides.join('')}</body></html>`;

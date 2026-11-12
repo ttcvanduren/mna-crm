@@ -442,7 +442,7 @@ function multBars(values, label) {
     <svg viewBox="0 0 ${W} ${H}" class="cs-svg" role="img" aria-label="${label} multiples of comparable deals, median ${mult(md)}">
       <line x1="${pad}" x2="${W}" y1="${H - 18}" y2="${H - 18}" stroke="var(--line-strong)"/>
       ${[0, 0.5, 1].map(f => `<text x="0" y="${y(cap * f) + 4}" font-size="10" fill="var(--muted)">${(cap * f).toFixed(1)}</text>`).join('')}
-      ${xs.map((v, i) => `<rect x="${pad + i * bw + bw * 0.15}" y="${y(v)}" width="${Math.max(1, bw * 0.7)}" height="${H - 18 - y(v)}" rx="1.5" fill="var(--track)" stroke="#cfc6b4" stroke-width=".6"><title>${mult(v)}</title></rect>`).join('')}
+      ${xs.map((v, i) => `<rect x="${pad + i * bw + bw * 0.15}" y="${y(v)}" width="${Math.max(1, bw * 0.7)}" height="${H - 18 - y(v)}" rx="1.5" fill="var(--track)" stroke="#c9c3b6" stroke-width=".6"><title>${mult(v)}</title></rect>`).join('')}
       <line x1="${pad}" x2="${W}" y1="${y(md)}" y2="${y(md)}" stroke="var(--accent)" stroke-width="1.5"/>
       <rect x="${W - 92}" y="${y(md) - 20}" width="90" height="17" rx="4" fill="var(--accent)"/><text x="${W - 47}" y="${y(md) - 8}" font-size="10.5" fill="#fff" text-anchor="middle" font-weight="600">Median ${mult(md)}</text>
     </svg></div>`;
@@ -861,7 +861,7 @@ async function consolidateFundHouses() {
 function openValuationReport(proj) {
   const r = valuate(proj), t = proj.target || {};
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(proj.name)} – valuation ${today()}</title>
-  <style>body{font-family:Inter,Segoe UI,Arial,sans-serif;color:#14181f;max-width:880px;margin:32px auto;padding:0 24px;font-size:13px;line-height:1.5}h1{font-size:22px;margin:0}
+  <style>body{font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f1b2d;max-width:880px;margin:32px auto;padding:0 24px;font-size:13px;line-height:1.5}h1{font-size:22px;margin:0}
   h2{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:#475467;border-bottom:1px solid #e6e8ec;padding-bottom:4px;margin-top:26px}table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid #eef0f3;vertical-align:top}
   th{font-size:11px;color:#667085;text-transform:uppercase}.num{text-align:right}.big{display:flex;gap:12px;margin:14px 0}.big div{flex:1;border:1px solid #e6e8ec;border-radius:8px;padding:12px;text-align:center}.big b{display:block;font-size:22px}
   .g{display:inline-block;width:22px;text-align:center;border-radius:4px;font-weight:700;color:#fff}.gA{background:#067647}.gB{background:#4ca30d}.gC{background:#98a2b3}.gD{background:#dc6803}.gE{background:#b42318}.muted{color:#667085}@media print{.noprint{display:none}}</style></head><body>

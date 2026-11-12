@@ -1695,7 +1695,7 @@ function runMatch() {
     || '<tr><td colspan="6"><div class="empty">No matches. Try lowering the minimum score or changing the role filter.</div></td></tr>';
   syncCampaign();
 }
-const scoreColor = s => (s >= 70 ? '#2f6b45' : s >= 45 ? '#23466f' : s >= 25 ? '#9a5b13' : '#a39d91');
+const scoreColor = s => (s >= 70 ? '#2f6b45' : s >= 45 ? '#2e5b8a' : s >= 25 ? '#9a5b13' : '#9aa1ad');
 $('#matchKinds').addEventListener('click', e => { const b = e.target.closest('[data-mkind]'); if (b) { state.matchKind = b.dataset.mkind; runMatch(); } });
 
 $('#matchTable').addEventListener('change', e => {

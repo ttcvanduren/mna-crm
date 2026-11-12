@@ -274,7 +274,7 @@ function openReport(proj, anonymise) {
   const v = valuation(proj);
   const actions = projectActions(proj).sort((a, b) => a.urgency - b.urgency);
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(proj.name)} – status report ${today()}</title>
-  <style>body{font-family:Inter,Segoe UI,Arial,sans-serif;color:#14181f;max-width:860px;margin:32px auto;padding:0 24px;font-size:13px;line-height:1.5}
+  <style>body{font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f1b2d;max-width:860px;margin:32px auto;padding:0 24px;font-size:13px;line-height:1.5}
   h1{font-size:22px;margin:0}h2{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:#475467;border-bottom:1px solid #e6e8ec;padding-bottom:4px;margin-top:26px}
   table{border-collapse:collapse;width:100%}td,th{text-align:left;padding:6px 8px;border-bottom:1px solid #eef0f3;vertical-align:top}th{font-size:11px;color:#667085;text-transform:uppercase}
   .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-top:14px}.kpi{border:1px solid #e6e8ec;border-radius:8px;padding:10px}.kpi b{font-size:20px;display:block}

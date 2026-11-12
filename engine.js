@@ -129,7 +129,7 @@ const Engine = (() => {
     if (/private equity|pe[- ]backed|\bpe\b|buyout|taken private|sponsor/.test(t)) return 'PE-backed';
     if (/\bvc\b|venture/.test(t)) return 'VC-backed';
     if (/subsidiary|part of|owned by|division/.test(t)) return 'Subsidiary';
-    if (/founder|family|private|employee|owner/.test(t)) return 'Private / founder';
+    if (/founder|family|private|employee|owner|management[- ]owned|\bmbo\b/.test(t)) return 'Private / founder';
     return 'Other';
   }
   const MAX_CONTACTS = 5;

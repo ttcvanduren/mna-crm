@@ -1,6 +1,6 @@
 /* global Engine, Taxonomy, state, byId, esc, logo, roleChip, money, openDrawer, saveShared, uid, toast, touch, flush, downloadSheet, slug, showTab, norm, ago, clsEditorHtml, applyClsChange */
 // Projects: one record per mandate (e.g. Lakeside for Inovoo). Companies link to it through company.projects[].project.
-const STAGE_COLORS = { 'Not approached': '#98a2b3', Approached: '#1d4ed8', Engaged: '#067647', Passed: '#b42318', Other: '#b54708' };
+const STAGE_COLORS = { 'Not approached': '#98a2b3', Approached: '#2e5b8a', Engaged: '#067647', Passed: '#b42318', Other: '#b54708' };
 const STAGE_CHIP = { 'Not approached': '', Approached: 'blue', Engaged: 'green', Passed: 'red', Other: 'amber' };
 const PROJECT_STATUSES = ['Active', 'On hold', 'Closed – deal', 'Closed – no deal'];
 const TARGET_FIELDS = [
