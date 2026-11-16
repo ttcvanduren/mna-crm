@@ -10,22 +10,25 @@ const Engine = (() => {
     { key: 'sector', label: 'Sector', aliases: ['sector', 'industry', 'branche', 'vertical', 'category', 'primaryindustry', 'industrygroup'] },
     { key: 'subsector', label: 'Sub-sector', aliases: ['subsector', 'subindustry', 'niche', 'segment', 'subcategory', 'industryclassifications', 'primarysector'] },
     { key: 'country', label: 'Country', aliases: ['country', 'land', 'hq', 'headquarters', 'location', 'countryregion', 'countryofincorporation', 'countryregionofincorporation', 'hqcountry', 'companycountry'] },
-    { key: 'hq_city', label: 'HQ city', aliases: ['hqcity', 'companycity', 'plaats', 'stad', 'city', 'spcity'] },
+    { key: 'hq_city', label: 'HQ city', aliases: ['hqcity', 'companycity', 'plaats', 'stad', 'city', 'spcity', 'spcitystate', 'citystate'] },
     { key: 'region', label: 'Region', aliases: ['region', 'regio', 'geographiclocations', 'geography', 'spgeography'] },
     { key: 'currency', label: 'Currency', aliases: ['currency', 'valuta', 'reportingcurrency'] },
-    { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'sales', 'turnover', 'omzet'], num: true, money: true },
+    { key: 'revenue', label: 'Revenue (m)', aliases: ['revenue', 'sales', 'turnover', 'omzet', 'totalrevenue', 'iqtotalrev', 'totalrev'], num: true, money: true },
     { key: 'ebitda', label: 'EBITDA (m)', aliases: ['ebitda'], num: true, money: true },
-    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees', 'totalemployees', 'spheadcountlatest', 'headcountlatest'], num: true },
+    { key: 'employees', label: 'Employees', aliases: ['employees', 'fte', 'headcount', 'medewerkers', 'staff', 'noofemployees', 'totalemployees', 'spheadcountlatest', 'headcountlatest', 'empl', 'nrofemployees'], num: true },
     { key: 'linkedin_employees', label: 'Employees on LinkedIn', aliases: ['linkedinemployees', 'employeesonlinkedin'], num: true },
-    { key: 'founded', label: 'Founded', aliases: ['founded', 'yearfounded', 'foundingyear', 'established', 'opgericht', 'spdateincorporated', 'dateincorporated', 'incorporated'] },
+    { key: 'founded', label: 'Founded', aliases: ['founded', 'yearfounded', 'foundingyear', 'established', 'opgericht', 'spdateincorporated', 'dateincorporated', 'incorporated', 'spyearestablished', 'yearestablished'] },
     { key: 'ownership', label: 'Ownership', aliases: ['ownership', 'owner', 'shareholder', 'shareholders', 'eigenaar', 'companytype', 'ownershiptype', 'ownershipstatustype', 'ownershipstatus'] },
     { key: 'investors', label: 'Investors', aliases: ['investors', 'currentinvestors', 'spcurrentinvestors', 'sponsors'] },
     { key: 'ticker', label: 'Ticker', aliases: ['ticker', 'exchangeticker', 'symbol'] },
     { key: 'capiq_id', label: 'Capital IQ ID', aliases: ['capitaliqid', 'ciqid', 'spcapitaliqid', 'capiqid', 'companyid', 'spcompanyid', 'spentityid'] },
     { key: 'portfolio', label: 'Portfolio companies', aliases: ['portfolio', 'portfoliocompanies'] },
-    { key: 'short_description', label: 'Short description', aliases: ['shortdescription', 'tagline', 'summary', 'oneliner'] },
-    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment', 'longbusinessdescription'], long: true },
+    { key: 'short_description', label: 'Short description', aliases: ['shortdescription', 'tagline', 'summary', 'oneliner', 'briefdescription'] },
+    { key: 'description', label: 'Description', aliases: ['description', 'about', 'omschrijving', 'businessdescription', 'profile', 'generalcomment', 'longbusinessdescription', 'extendeddescription'], long: true },
     { key: 'keywords', label: 'Keywords', aliases: ['keywords', 'tags', 'products', 'services', 'sptopictag', 'topictag', 'topictags'] },
+    { key: 'customer_segment', label: 'Customer type (Enterprise / Mid-market / SME / Public sector / Consumers)', aliases: ['clients', 'customersegment', 'customertype', 'clienttype', 'customersize', 'targetcustomers', 'klanttype'] },
+    { key: 'customer_industries', label: 'Customer industries (sector focus)', aliases: ['sectorfocus', 'customerindustries', 'industryfocus', 'verticalsserved', 'clientindustries', 'endmarkets'] },
+    { key: 'delivery', label: 'Delivery (Software / Software & services / Services)', aliases: ['delivery', 'softwareorsiservices', 'softwareservices', 'deliverymodel'] },
     { key: 'target_sectors', label: 'Looking for sectors', aliases: ['targetsectors', 'interestsectors', 'acquisitionsectors', 'focussectors', 'focus', 'investmentfocus', 'lookingforsectors'] },
     { key: 'target_countries', label: 'Looking for countries', aliases: ['targetcountries', 'lookingforcountries', 'targetgeography', 'focuscountries', 'geographicfocus', 'focusgeography'] },
     { key: 'min_revenue', label: 'Min target revenue', aliases: ['minrevenue', 'mintargetrevenue', 'minsize'], num: true, money: true },
@@ -51,12 +54,13 @@ const Engine = (() => {
     { key: 'status', label: 'Status / current stage', aliases: ['currentstage', 'status', 'stage', 'processstatus'] },
     { key: 'furthest_stage', label: 'Furthest stage reached', aliases: ['furtheststagereached', 'furtheststage', 'higheststage'] },
     { key: 'last_contact', label: 'Date of last contact', aliases: ['dateoflastcontact', 'lastcontact', 'lastcontactdate', 'date'], date: true },
-    { key: 'pass_reason', label: 'Pass reason', aliases: ['passreason', 'reason', 'reasonforpassing', 'declinereason', 'reasonpassed'] },
+    { key: 'pass_reason', label: 'Pass reason', aliases: ['passreason', 'reason', 'reasonforpassing', 'declinereason', 'reasonpassed', 'reasonforexclusion', 'exclusioncomment', 'exclusionreason'] },
     { key: 'rationale', label: 'Acquisition rationale', aliases: ['acquisitionrationale', 'rationale', 'fitrationale', 'investmentrationale', 'strategicrationale', 'whyfit'] },
     { key: 'wave', label: 'Outreach wave', aliases: ['outreachwave', 'wave'] },
     { key: 'log', label: 'Log', aliases: ['log', 'history', 'activitylog'] },
     { key: 'responsible', label: 'Responsible', aliases: ['responsible', 'coverage', 'dealteam', 'accountowner'] },
     { key: 'tier', label: 'Tier / priority', aliases: ['tier', 'priority', 'prio'] },
+    { key: 'category', label: 'Mandate category (e.g. technology bucket)', aliases: ['technology', 'category', 'bucket', 'technologycategory', 'theme'] },
     { key: 'remarks', label: 'Remarks', aliases: ['remarks', 'comment', 'comments', 'internalcomment', 'opmerkingen', 'internalnotes', 'detail'], multi: true },
   ];
 
@@ -82,7 +86,7 @@ const Engine = (() => {
     if (/\bsigned\b(?!.*nda)|closed|completion|\bspa\b(?! mark)/.test(t) && !/nda/.test(t)) return 'Signed';
     if (/binding|\bloi\b|letter of intent|exclusiv|final offer/.test(t)) return 'Binding offer';
     if (/data ?room|due diligence|\bdd\b|\bvdr\b/.test(t)) return 'Data room / DD';
-    if (/meeting|session|presentation|call|visit|\bmp\b/.test(t)) return 'Management meeting';
+    if (/meeting|session|presentation|call|visit|\bmp\b|intro with|mgmt intro|management intro/.test(t)) return 'Management meeting';
     if (/\bioi\b|indicative|offer|\bbid\b|term sheet/.test(t)) return 'IOI received';
     if (/\bim\b|info ?memo|under review|\bcim\b/.test(t)) return 'IM sent';
     if (/nda (sent|requested|out)|nda mark|positive|interested|conversation|^9\./.test(t)) return 'NDA sent';
@@ -391,7 +395,9 @@ const Engine = (() => {
         // Absolute amounts (e.g. Apollo's "Annual Revenue" 12500000) in a millions column.
         if (f.money && typeof v === 'number' && v > 100000 && unitMult === 1) v = v / 1e6;
         // Founded as a date (S&P "Date incorporated": an Excel serial or "2/1/2014") → the year.
-        if (key === 'founded' && v !== '' && v != null) { const d = typeof raw === 'number' ? parseDate(raw) : String(v); const y = d.match(/\b(18|19|20)\d{2}\b/); v = y ? y[0] : ''; }
+        // S&P "City, State" ("Darmstadt, Hessen") → the city.
+        if (key === 'hq_city' && typeof v === 'string' && v.includes(',')) v = v.split(',')[0].trim();
+        if (key === 'founded' && v !== '' && v != null) { const d = typeof raw === 'number' && raw >= 1800 && raw <= 2100 ? String(raw) : typeof raw === 'number' ? parseDate(raw) : String(v); const y = d.match(/\b(18|19|20)\d{2}\b/); v = y ? y[0] : ''; }
         if (v !== '' && v != null && company[key] == null) company[key] = v;
       } else if (scope.startsWith('contact')) {
         const idx = +scope.slice(7) - 1;
@@ -419,6 +425,13 @@ const Engine = (() => {
     if (sb) { company.sponsor_name ||= sb[1].split(/;\s*/)[0].trim(); company.ownership = `PE-backed (${sb[1].trim()})`; company.ownership_src = 'provider'; }
     else if (/^never sponsor-backed$/i.test(company.ownership || '')) { company.ownership = 'Private (never sponsor-backed)'; company.ownership_src = 'provider'; }
     else if (/corporate investments?\s*\[/i.test(company.ownership || '')) { company.ownership = company.ownership.replace(/current or pending corporate investments?\s*\[([^\]]+)\]/i, 'Corporate investor: $1'); company.ownership_src = 'provider'; }
+    // "SME/Enterprise" → main bucket Mixed with both segments; unknown words like "To be confirmed" are dropped.
+    if (company.customer_segment) {
+      const segs = segmentsOf(company.customer_segment);
+      if (segs.length) { company.customer_segments = segs; company.customer_segment = segs.length === 1 ? segs[0] : 'Mixed'; }
+      else if (!/mixed|agnostic|all|both/i.test(company.customer_segment)) delete company.customer_segment;
+      else company.customer_segment = 'Mixed';
+    }
     company.role = normaliseRole(company.role) || (/private equity|venture capital|investment firm|family office/i.test(company.ownership || '') ? 'Investor' : '') || opts.role || '';
     if (company.linkedin_url) company.linkedin_url = cleanUrl(company.linkedin_url);
     if (company.website && !/[a-z0-9-]\.[a-z]{2,}/i.test(company.website)) delete company.website; // e.g. "Reference", "n/a"
@@ -803,6 +816,37 @@ const Engine = (() => {
     return [0, null];
   }
 
+  // ---------- Customer type: who a company sells to ----------
+  // Buckets (one main + all that apply): Enterprise, Mid-market, SME, Public sector, Consumers; "Mixed" when several.
+  const SEGMENTS = ['Enterprise', 'Mid-market', 'SME', 'Public sector', 'Consumers'];
+  function segmentsOf(text) {
+    const t = lower(text), out = [];
+    if (/enterprise|large (companies|corporates|organi[sz]ations)|corporates?\b|multinational|grootzakelijk|fortune|blue[- ]chip/.test(t)) out.push('Enterprise');
+    if (/mid[- ]?(market|size|sized)|middelgrote|mittelstand/.test(t)) out.push('Mid-market');
+    if (/\bsmes?\b|\bsmbs?\b|small (and medium|businesses|companies)|mkb|\bkmo\b|freelancer|zzp|entrepreneurs?|ondernemers|small business/.test(t)) out.push('SME');
+    if (/public sector|public[- ]sector|public organi[sz]ations|public authorit|government|overheid|municipal|gemeente|ministr|\beducation(al)? institution|onderwijsinstell|universities|schools\b|hospitals|healthcare institution|zorginstelling|housing association|woningcorporatie|non[- ]?profits?\b/.test(t)) out.push('Public sector');
+    if (/consumer|\bb2c\b|end[- ]users?|particulier|households/.test(t)) out.push('Consumers');
+    return [...new Set(out)];
+  }
+  // Main bucket + list, from research / import fields; falls back to reading the description (marked guessed).
+  function customerOf(c) {
+    const given = [].concat(c.customer_segments || [], c.customer_segment || []).flatMap(s => SEGMENTS.includes(s) ? [s] : segmentsOf(s));
+    let segs = [...new Set(given)], guessed = false;
+    if (!segs.length && c.customer_segment !== 'Mixed') { segs = segmentsOf([c.short_description, c.description, c.summary, (c.tags || []).join(' ')].join(' ')); guessed = segs.length > 0; }
+    const main = SEGMENTS.includes(c.customer_segment) ? c.customer_segment : segs.length === 1 ? segs[0] : segs.length ? 'Mixed' : c.customer_segment === 'Mixed' ? 'Mixed' : '';
+    return { segment: main, segments: segs, industries: c.customer_industries || '', geography: c.customer_geography || '', guessed };
+  }
+  // Software, software & services, or services (consultancy / IT services).
+  function deliveryOf(c) {
+    if (c.delivery) return /services/i.test(c.delivery) ? (/software/i.test(c.delivery) ? 'Software & services' : 'Services') : 'Software';
+    const p = typeof Taxonomy !== 'undefined' ? Taxonomy.pathOfCompany(c) : null;
+    if (p?.sector === 'IT services') return 'Services';
+    const m = lower(c.rev_signals?.business_model);
+    if (/consult|services|project|detacher/.test(m) && /saas|licen|software|subscription/.test(m)) return 'Software & services';
+    if (/consult|services|detacher|agency/.test(m)) return 'Services';
+    return p?.industry === 'Technology' ? 'Software' : '';
+  }
+
   // ---------- Revenue for size fit: stated, else the revenue estimate (revenue.js), else ~€120k per head ----------
   // `live` also computes an estimate on the fly (cached in revenue.js); off while loading, when the deals aren't in yet.
   function revenueOf(c, live = true) {
@@ -988,8 +1032,12 @@ const Engine = (() => {
   }
 
   const BUY_SIDE = new Set(['Buyer', 'Investor']);
+  // A company typed Target can still buy: PE-backed or listed, 250+ staff / €25m+ revenue, or any deal on record
+  // (buyer likelihood ≥ 0.35). Small founder-owned companies without deals stay targets only.
+  const canBuy = c => !c.role || BUY_SIDE.has(c.role) || (c.role === 'Target' && sideOf(c, false).buyer >= 0.35);
   function roleScore(deal, cand) {
     if (!deal.role || !cand.role) return [0.5, null];
+    if (deal.role === 'Target' && cand.role === 'Target' && canBuy(cand)) return [0.5, 'Also a possible buyer'];
     if (deal.role === 'Target' && BUY_SIDE.has(cand.role)) return [1, `${cand.role} for a target`];
     if (BUY_SIDE.has(deal.role) && cand.role === 'Target') return [1, 'Potential target'];
     return [0, null];
@@ -1133,7 +1181,7 @@ const Engine = (() => {
     return companies
       .filter(c => c.id !== deal.id)
       .map(c => {
-        const candIsBuyerSide = BUY_SIDE.has(c.role) || (!c.role && candIsBuyerSideDefault);
+        const candIsBuyerSide = BUY_SIDE.has(c.role) || (candIsBuyerSideDefault && (!c.role || (c.role === 'Target' && canBuy(c))));
         const parts = {
           sector: sectorScore(deal, c),
           acquisitions: acquisitionFitScore(deal, c),
@@ -1178,7 +1226,7 @@ const Engine = (() => {
   return {
     COMPANY_FIELDS, CONTACT_FIELDS, PROJECT_FIELDS, STAGE_GROUPS, stageGroup, BOARD_STAGES, DATE_KEYS, boardStage, stageIndex, reachedIndex, PASS_REASONS, inferRoleTag, OUTREACH_PRIORITY, bestContacts, ownershipType, TARGET_OPTIONS, MAX_CONTACTS, STATUSES, DEFAULT_WEIGHTS, WEIGHT_LABELS, SKIP_SHEETS,
     headerKey, guessTarget, mapHeaders, detectHeaderRow, detectUnit, detectCurrency, guessRoleFromSheet, guessProject, parseRow, parseNumber, parseDate,
-    listAcquisitionNotes, acquisitionProfile, sideOf, revenueOf, nichesOf, dealPath, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
+    listAcquisitionNotes, acquisitionProfile, sideOf, canBuy, revenueOf, SEGMENTS, segmentsOf, customerOf, deliveryOf, nichesOf, dealPath, warm, relevantDeals, guessRole, isFundVehicle, houseKey, houseName, fundHouses, normName, domainOf, rootDomain, brandOf, cleanUrl, linkedinKey, personKey, buildIndex, indexAdd, findDuplicates, duplicateReason, duplicateGroups, richness, mergeInto, mergeCompanies, primaryContact, hasEmail, match, render, fmt, regionOf, normaliseRole,
   };
 })();
 if (typeof module !== 'undefined') module.exports = Engine;

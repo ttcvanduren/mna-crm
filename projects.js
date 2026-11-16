@@ -91,9 +91,9 @@ function renderProjects() {
       const s = stats(p.name);
       const reached = s.total - s.groups['Not approached'];
       return `<div class="project-card" data-project="${esc(p.name)}">
-        <div class="pc-head"><div><div class="pc-name">${esc(p.name)}</div><div class="muted small">${esc(p.client || 'No client set')}</div></div>
+        <div class="pc-head"><div><div class="pc-name">${esc(p.name)}</div><div class="muted small">${esc(p.client || 'No client set')} · ${isBuy(p) ? 'Buy-side' : 'Sell-side'}</div></div>
           <span class="chip ${p.status === 'Active' ? 'green' : ''}">${esc(p.status)}</span></div>
-        <div class="pc-nums"><div><b>${s.total}</b><span>buyers</span></div><div><b>${reached}</b><span>contacted</span></div>
+        <div class="pc-nums"><div><b>${s.total}</b><span>${noun(p)}</span></div><div><b>${reached}</b><span>contacted</span></div>
           <div><b style="color:${STAGE_COLORS.Engaged}">${s.groups.Engaged}</b><span>engaged</span></div><div><b style="color:${STAGE_COLORS.Passed}">${s.groups.Passed}</b><span>passed</span></div></div>
         ${s.total ? stackBar(s.groups, s.total) : '<div class="stack"></div>'}
         <div class="muted small">${s.last ? `Last contact ${esc(s.last)}` : 'No contact yet'}${s.team.length ? ` · Team ${esc(s.team.join(', '))}` : ''}</div>
@@ -119,11 +119,14 @@ function renderProjectDetail(name) {
 
   const tab = state.projectTab || 'overview';
   const due = followUpsDue(name).length;
-  const tabs = [['overview', 'Overview'], ['buyers', `Buyers (${all.length})`], ['board', 'Pipeline board'], ['valuation', '€ Valuation'], ['find', '✦ Find buyers'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]];
+  const buy = isBuy(proj);
+  const tabs = buy
+    ? [['overview', 'Overview'], ['buyers', `Targets (${all.length})`], ['board', 'Pipeline board'], ['find', '✦ Find targets'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]]
+    : [['overview', 'Overview'], ['buyers', `Buyers (${all.length})`], ['board', 'Pipeline board'], ['valuation', '€ Valuation'], ['find', '✦ Find buyers'], ['followups', `Follow-ups${due ? ` <span class="badge">${due}</span>` : ''}`]];
   const head = `<div class="page-head">
       <div><button class="link small" id="backProjects">← All projects</button>
-        <h1>${esc(proj.name)} <span class="chip ${proj.status === 'Active' ? 'green' : ''}" style="vertical-align:middle">${esc(proj.status)}</span></h1>
-        <div class="muted">${esc(proj.client || 'No client set')}${proj.target?.sector ? ' · ' + esc(proj.target.sector) : ''}${proj.description ? ' · ' + esc(proj.description) : ''}</div></div>
+        <h1>${esc(proj.name)} <span class="chip ${buy ? 'gold' : 'blue'}" style="vertical-align:middle">${buy ? 'Buy-side' : 'Sell-side'}</span> <span class="chip ${proj.status === 'Active' ? 'green' : ''}" style="vertical-align:middle">${esc(proj.status)}</span></h1>
+        <div class="muted">${esc(proj.client || 'No client set')}${!buy && proj.target?.sector ? ' · ' + esc(proj.target.sector) : ''}${proj.description ? ' · ' + esc(proj.description) : ''}</div></div>
       <div class="actions"><button class="btn" id="editProject">Edit project & deal profile</button><button class="btn" id="exportProject">Export Excel</button></div>
     </div>
     <div class="page-tabs">${tabs.map(([k, l]) => `<button data-ptab="${k}" class="${k === tab ? 'active' : ''}">${l}</button>`).join('')}</div>`;
@@ -133,33 +136,33 @@ function renderProjectDetail(name) {
     <div class="funnel">${Engine.STAGE_GROUPS.filter(g => g !== 'Other' || s.groups.Other).map(g => `<button class="funnel-step ${pf.group === g ? 'on' : ''}" data-group="${g}" style="--c:${STAGE_COLORS[g]}">
         <b>${s.groups[g]}</b><span>${g}</span><i>${s.total ? Math.round((s.groups[g] / s.total) * 100) : 0}%</i></button>`).join('')}</div>
     <div class="filters">
-      <input type="search" id="pfSearch" placeholder="Search buyers, notes, rationale…" value="${esc(pf.q)}">
+      <input type="search" id="pfSearch" placeholder="Search ${noun(proj)}, notes, rationale…" value="${esc(pf.q)}">
       <select id="pfTier">${opt(tiers, pf.tier, 'All tiers')}</select>
       <select id="pfResp">${opt(resps, pf.resp, 'Everyone')}</select>
       ${pf.group || pf.tier || pf.resp || pf.q ? '<button class="btn ghost sm" id="pfClear">Clear filters</button>' : ''}
-      <span class="muted small">${rows.length} of ${all.length} buyers</span>
+      <span class="muted small">${rows.length} of ${all.length} ${noun(proj)}</span>
       <span class="spacer"></span>
-      <select id="pfMove"><option value="">Move selected to…</option>${Engine.BOARD_STAGES.map(s => `<option>${s}</option>`).join('')}</select>
+      <select id="pfMove"><option value="">Move selected to…</option>${Engine.BOARD_STAGES.map(s => `<option value="${s}">${esc(stageLabel(s, proj))}</option>`).join('')}</select>
       <button class="btn" id="projResearch">✦ Export for research</button>
       <button class="btn" id="pfPeople">👤 Find people</button>
       <button class="btn primary" id="pfEmail">✉ Email selected</button>
     </div>
     <div class="table-wrap">
       <table class="data" id="projectTable"><thead><tr>
-        <th class="cb"><input type="checkbox" id="pfAll"></th><th>Company</th><th>Tier</th><th>Heat</th><th>Current stage</th><th>Furthest</th><th>Resp.</th><th>Last contact</th><th>People</th><th>Rationale / notes</th>
+        <th class="cb"><input type="checkbox" id="pfAll"></th><th>Company</th><th>Tier</th><th>${buy ? 'Category' : 'Heat'}</th><th>Current stage</th><th>Furthest</th><th>Resp.</th><th>Last contact</th><th>People</th><th>Rationale / notes</th>
       </tr></thead><tbody>
       ${rows.slice(0, 400).map(({ c, p }) => `<tr data-id="${c.id}" class="${state.picked.has(c.id) ? 'sel' : ''}">
         <td class="cb"><input type="checkbox" data-pick="${c.id}" ${state.picked.has(c.id) ? 'checked' : ''}></td>
         <td>${companyCell(c)}</td>
         <td>${p.tier ? `<span class="tier t${esc(p.tier)}">T${esc(p.tier)}</span>` : ''}</td>
-        <td>${heatChip(c, p)}</td>
+        <td>${buy ? `<span class="small">${esc(p.category || '')}</span>` : heatChip(c, p)}</td>
         <td>${stageChip(p.status)} ${conflictChip(c, name)}</td>
         <td class="small">${p.furthest_stage && p.furthest_stage !== p.status ? esc(p.furthest_stage) : ''}</td>
         <td>${esc(p.responsible || '')}</td>
         <td class="small">${esc(p.last_contact || '')}</td>
         <td class="small">${c.contacts.length ? `${c.contacts.length} · ${c.contacts.filter(x => x.email).length} ✉` : '–'}</td>
         <td class="wrap small muted" title="${esc([p.rationale, p.pass_reason && 'Pass reason: ' + p.pass_reason, p.log].filter(Boolean).join('\n'))}">${esc((p.pass_reason ? 'Passed: ' + p.pass_reason : p.rationale || p.log || p.remarks || '').slice(0, 140))}</td>
-      </tr>`).join('') || '<tr><td colspan="9"><div class="empty">No buyers match.</div></td></tr>'}
+      </tr>`).join('') || `<tr><td colspan="9"><div class="empty">No ${noun(proj)} match.</div></td></tr>`}
       </tbody></table>
     </div>`;
 }
@@ -198,6 +201,8 @@ $('#projectsView').addEventListener('click', e => {
   if (id === 'projImport') return $('#upload').click();
   if (id === 'pfClear') { Object.assign(pf, { q: '', group: '', tier: '', resp: '' }); return renderProjects(); }
   if (id === 'exportProject') {
+    const bp = state.projects.find(p => p.name === state.projectView);
+    if (isBuy(bp)) { toast('Building the target list…'); return TargetList.fromProject(bp).then(r => toast(`✓ Exported ${r.fits} targets and ${r.graveyard} in the graveyard.`, 5000)).catch(err => toast('Export failed: ' + err.message, 6000)); }
     const rows = members(state.projectView).map(({ c, p }) => ({ ...flatten(c), 'Project tier': p.tier || '', 'Project stage': p.status || '', 'Furthest stage': p.furthest_stage || '', Responsible: p.responsible || '', 'Last contact': p.last_contact || '', Rationale: p.rationale || '', 'Pass reason': p.pass_reason || '', Log: p.log || '' }));
     return downloadSheet(rows, `project-${slug(state.projectView)}.xlsx`);
   }
@@ -237,10 +242,15 @@ $('#projectsView').addEventListener('input', e => {
 
 // ---------- Create / edit ----------
 function openProjectDialog(name) {
-  const p = name ? state.projects.find(x => x.name === name) : { name: '', client: '', status: 'Active', description: '' };
+  const p = name ? state.projects.find(x => x.name === name) : { name: '', client: '', status: 'Active', description: '', side: 'sell' };
   const dlg = $('#projectDialog');
   dlg.dataset.name = name || '';
+  const side = p.side === 'buy' ? 'buy' : 'sell';
   $('#projectForm').innerHTML = `<h2>${name ? 'Edit project' : 'New project'}</h2>
+    <div class="side-pick">
+      <label class="side-opt"><input type="radio" name="side" value="sell" ${side === 'sell' ? 'checked' : ''}><span><b>Sell-side</b><small>We sell a company and look for buyers</small></span></label>
+      <label class="side-opt"><input type="radio" name="side" value="buy" ${side === 'buy' ? 'checked' : ''}><span><b>Buy-side</b><small>A client wants to acquire: we screen for targets</small></span></label>
+    </div>
     <div class="form-grid">
       <label>Project name <input name="name" value="${esc(p.name)}" required placeholder="e.g. Thames"></label>
       <label>Client <input name="client" value="${esc(p.client)}" placeholder="e.g. Teavaro"></label>
@@ -248,6 +258,8 @@ function openProjectDialog(name) {
       <label>Sector <input name="sector" value="${esc(p.sector || '')}" placeholder="e.g. Customer data platform"></label>
       <label class="full">Project note <input name="description" value="${esc(p.description || '')}" placeholder="e.g. Sell-side, sovereign document editor, launched Sep-2026"></label>
     </div>
+    <div class="side-buy" ${side === 'buy' ? '' : 'hidden'}>${buyBoxFormHtml(p)}</div>
+    <div class="side-sell" ${side === 'sell' ? '' : 'hidden'}>
     <h3>Deal profile: the company you're selling</h3>
     <p class="muted small">Used by <b>Find buyers</b>, the valuation and the email placeholders ({{deal_sector}}, {{deal_country}}, {{deal_revenue}}…).</p>
     <label class="full">Industry › sector › sub-sector › niche <span class="muted small">(Find buyers ranks on these levels; leave empty to derive them from the description)</span>
@@ -256,6 +268,7 @@ function openProjectDialog(name) {
       ${TARGET_FIELDS.map(([k, label, ph]) => `<label class="${k === 'description' || k === 'keywords' ? 'full' : ''}">${label}${k === 'description'
         ? `<textarea name="t_${k}" rows="4" placeholder="${esc(ph)}">${esc(p.target?.[k] ?? '')}</textarea>`
         : `<input name="t_${k}" value="${esc(p.target?.[k] ?? '')}" placeholder="${esc(ph)}">`}</label>`).join('')}
+    </div>
     </div>
     <div class="toolbar"><span class="spacer"></span><button class="btn" value="cancel">Cancel</button><button class="btn primary" value="save">Save</button></div>`;
   const t = p.target || {};
@@ -269,6 +282,13 @@ function renderProjectCls() {
   $('#pdCls').innerHTML = clsEditorHtml(p, 'data-pcls', 'deal') +
     ['cls_industry', 'cls_sector', 'cls_subsector', 'niche'].map(k => `<input type="hidden" name="t_${k}" value="${esc(k === 'niche' ? (o.niche_auto ? '' : o.niche || '') : o[k] || '')}">`).join('');
 }
+// Sell-side / buy-side switch in the project dialog.
+document.addEventListener('change', e => {
+  if (e.target.name !== 'side' || !e.target.closest('#projectForm')) return;
+  const buy = e.target.value === 'buy';
+  $('#projectForm .side-buy').hidden = !buy;
+  $('#projectForm .side-sell').hidden = buy;
+});
 document.addEventListener('change', e => {
   const level = e.target.dataset?.pcls;
   if (!level) return;
@@ -278,11 +298,14 @@ document.addEventListener('change', e => {
 $('#projectDialog').addEventListener('close', () => {
   const dlg = $('#projectDialog');
   if (dlg.returnValue !== 'save') return;
-  const raw = Object.fromEntries(new FormData($('#projectForm')));
+  const fd = new FormData($('#projectForm'));
+  const raw = Object.fromEntries(fd);
   const d = {}, target = {};
-  for (const [k, v] of Object.entries(raw)) if (k.startsWith('t_')) target[k.slice(2)] = v.trim(); else d[k] = v;
+  for (const [k, v] of Object.entries(raw)) if (k.startsWith('t_')) target[k.slice(2)] = v.trim(); else if (!k.startsWith('b_')) d[k] = v;
   for (const k of ['revenue', 'ebitda', 'employees']) target[k] = Engine.parseNumber(target[k]);
   d.target = target;
+  d.side = raw.side === 'buy' ? 'buy' : 'sell';
+  if (d.side === 'buy') d.buybox = readBuyBox(fd);
   d.name = norm(d.name);
   if (!d.name) return;
   const old = dlg.dataset.name;

@@ -797,3 +797,16 @@ a { color: var(--accent); }
 .topbar { background: rgba(255,255,255,.9); }
 .gsearch input:focus { border-color: var(--ink); box-shadow: 0 0 0 3px rgba(15,27,45,.1); }
 .res-mark, .co-star { color: var(--gold); }
+
+/* ---------- Buy-side projects (buyside.js) ---------- */
+.side-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 4px 0 16px; }
+.side-opt { display: flex !important; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; margin: 0; }
+.side-opt:has(input:checked) { border-color: var(--gold); background: var(--gold-soft); }
+.side-opt input { margin-top: 3px; }
+.side-opt b { display: block; font-size: 14px; }
+.side-opt small { color: var(--muted); font-weight: 400; }
+.check-row { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; font-weight: 400; }
+.check-row label.check { margin: 0; }
+.pair { display: flex; gap: 8px; margin-top: 4px; }
+.pair input { width: 100%; }
+table.target-list td.wrap { white-space: normal; min-width: 220px; max-width: 360px; }

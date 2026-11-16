@@ -17,6 +17,7 @@ const Datasets = (() => {
       Website: c.website || '', LinkedIn: c.linkedin_url || '', Country: c.country || '', City: c.hq_city || '', Founded: c.founded || '',
       Ownership: c.ownership || '', 'PE / VC owner': c.sponsor_name || '', 'Owner since': c.sponsor_since || '', Parent: c.parent_name || '', 'Investor type': c.investor_type || '',
       Industry: p.industry || '', Sector: p.sector || '', 'Sub-sector': p.subsector || '', Niche: c.niche || '', 'Source label': c.sector || '',
+      ...(() => { const cu = Engine.customerOf(c); return { 'Customer type': cu.segment, 'Customer segments': cu.segments.join('; '), 'Customer industries': cu.industries, 'Customer geography': cu.geography, 'Customer type source': cu.guessed ? 'description' : cu.segment ? 'research / list' : '', Delivery: Engine.deliveryOf(c) }; })(),
       Employees: employeesOf(c) ?? '', 'Revenue (stated, m)': c.revenue ?? '', Currency: c.revenue != null ? c.currency || 'EUR' : '', 'EBITDA (m)': c.ebitda ?? '', 'Financials year': c.financials_year || '',
       'Revenue estimate (EUR m)': r2(e?.mid), 'Estimate P25': r2(e?.p25), 'Estimate P75': r2(e?.p75), 'Estimate grade': e?.grade || '',
       'Indicative EV (EUR m)': r2(e?.ev), 'EV low': r2(e?.ev_low), 'EV high': r2(e?.ev_high),

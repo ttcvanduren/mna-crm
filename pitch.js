@@ -50,7 +50,7 @@ function pitchCandidates(p, sel) {
   // The match engine over every company is the slow part (seconds); it only reruns when the company profile changes, not when deals are toggled.
   if (pbMatch.sig !== profileSig) {
     const phrases = [...new Set([...T.tags, T.subsector].filter(Boolean).map(s => s.toLowerCase().trim()).filter(s => s.length > 3))];
-    const scored = Engine.match(pitchDeal(p), state.companies.filter(c => c.role !== 'Target'), state.weights).map(m => {
+    const scored = Engine.match(pitchDeal(p), state.companies.filter(c => (c.role !== 'Target' || Engine.canBuy(c))), state.weights).map(m => {
       const c = m.company, own = [c.description, c.short_description, c.summary, c.acquisition_focus, c.target_sectors, (c.tags || []).join(' '), c.subsector].join(' ').toLowerCase();
       const acq = (c.acquisitions || []).map(a => ({ a, text: [a.target, a.industry, a.description, Array.isArray(a.tags) ? a.tags.join(' ') : a.tags].join(' ').toLowerCase() }));
       const inOwn = phrases.filter(ph => own.includes(ph)), inAcq = phrases.filter(ph => acq.some(x => x.text.includes(ph)));
@@ -426,6 +426,6 @@ document.addEventListener('input', e => {
   if (e.target.id !== 'pbSearch') return;
   const q = Engine.normName(e.target.value), box = $('#pbSuggest');
   if (!q || q.length < 2) { box.innerHTML = ''; return; }
-  const hits = state.companies.filter(c => c.role !== 'Target' && Engine.normName(c.name).includes(q)).slice(0, 8);
+  const hits = state.companies.filter(c => (c.role !== 'Target' || Engine.canBuy(c)) && Engine.normName(c.name).includes(q)).slice(0, 8);
   box.innerHTML = hits.map(c => `<button class="pb-hit" data-pb-pin="${c.id}"><b>${esc(c.name)}</b> <span class="muted small">${esc([c.role === 'Investor' ? 'Financial' : 'Strategic', c.country].filter(Boolean).join(' · '))}</span></button>`).join('') || '<div class="muted small">No match</div>';
 });

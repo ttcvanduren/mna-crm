@@ -270,6 +270,15 @@ If the name is ambiguous, use the website and country to pick the right company,
     if (c.ebitda == null && num(p.ebitda) != null) { c.ebitda = num(p.ebitda); c.currency ||= 'EUR'; n++; }
     if (blank(c.acquisition_focus) && p.acquisition_focus) { c.acquisition_focus = p.acquisition_focus; n++; }
     for (const k of ['target_sectors', 'target_countries']) set(c, k, p[k]);
+    // Customer type (who the company sells to): main bucket, all buckets, industries served, geography, named clients.
+    // Sourced research replaces a value that was guessed from an import label; your own entries win.
+    if (p.customer_segment || p.customer_segments?.length) {
+      const segs = [].concat(p.customer_segments || [], p.customer_segment || []).flatMap(s => Engine.SEGMENTS.includes(s) ? [s] : Engine.segmentsOf(s));
+      const main = Engine.SEGMENTS.includes(p.customer_segment) || p.customer_segment === 'Mixed' ? p.customer_segment : segs.length > 1 ? 'Mixed' : segs[0] || '';
+      if (main && (isEmpty(c.customer_segment) || c.customer_src !== 'user')) { Object.assign(c, { customer_segment: main, customer_segments: [...new Set(segs)], customer_src: src }); n++; }
+    }
+    for (const k of ['customer_industries', 'customer_geography']) if (p[k] && (isEmpty(c[k]) || c.customer_src !== 'user')) { if (c[k] !== p[k]) n++; c[k] = String(p[k]); }
+    if (Array.isArray(p.customer_examples) && p.customer_examples.length) set(c, 'customer_examples', p.customer_examples.map(String).slice(0, 8));
     // Revenue signals (revenue.js): figures and observations that make the revenue estimate sharper. Amounts in EUR m
     // (acv in EUR k). Newer research replaces older signals; your own numbers stay in c.revenue.
     if (p.rev_signals && typeof p.rev_signals === 'object') {

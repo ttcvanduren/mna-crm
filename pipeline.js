@@ -76,9 +76,10 @@ function emailFromProject(name, ids) {
 
 function renderProjectTab(proj, tab) {
   const el = $('#projectBody');
-  if (tab === 'overview') el.innerHTML = overviewHtml(proj);
+  const buy = typeof isBuy === 'function' && isBuy(proj);
+  if (tab === 'overview') el.innerHTML = buy ? buyOverviewHtml(proj) : overviewHtml(proj);
   if (tab === 'board') el.innerHTML = boardHtml(proj);
-  if (tab === 'find') el.innerHTML = findHtml(proj);
+  if (tab === 'find') el.innerHTML = buy ? findTargetsHtml(proj) : findHtml(proj);
   if (tab === 'followups') el.innerHTML = followupsHtml(proj);
   if (tab === 'valuation') renderValuationTab(proj, el);
 }
@@ -218,7 +219,7 @@ function boardHtml(proj) {
       const cards = all.filter(m => Engine.boardStage(m.p.status) === st).sort((a, b) => String(a.p.tier || 9).localeCompare(String(b.p.tier || 9)));
       const color = STAGE_COLORS[Engine.stageGroup(st)];
       return `<div class="col" data-col="${st}">
-        <div class="col-head" style="border-color:${color}"><span>${st}</span><b>${cards.length}</b></div>
+        <div class="col-head" style="border-color:${color}"><span>${esc(stageLabel(st, proj))}</span><b>${cards.length}</b></div>
         <div class="col-body">${cards.slice(0, COL_LIMIT).map(({ c, p }) => {
           const d = daysSince(p.last_contact);
           return `<div class="kcard" draggable="true" data-card="${c.id}">

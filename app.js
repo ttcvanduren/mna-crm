@@ -307,7 +307,7 @@ function filteredCompanies() {
   const q = $('#search').value.toLowerCase().trim();
   const role = $('#filterRole').value, project = $('#filterProject').value, country = $('#filterCountry').value;
   const enr = $('#filterEnriched').value, email = $('#filterEmail').checked, multi = $('#filterMulti').checked;
-  const sector = $('#filterSector').value, own = $('#filterOwnership').value;
+  const sector = $('#filterSector').value, own = $('#filterOwnership').value, cust = $('#filterCustomers').value;
   const [smin, smax] = ($('#filterSize').value || '-').split('-').map(v => (v === '' ? null : Number(v)));
   const list = state.companies.filter(c =>
     (!role || c.role === role) &&
@@ -315,6 +315,7 @@ function filteredCompanies() {
     (!country || c.country === country) &&
     (!sector || clsMatches(c, sector)) &&
     (!own || Engine.ownershipType(c.ownership) === own) &&
+    (!cust || Engine.customerOf(c).segments.includes(cust)) &&
     (smin == null && smax == null || (employeesOf(c) != null && (smin == null || employeesOf(c) >= smin) && (smax == null || employeesOf(c) < smax))) &&
     (!multi || c.projects.length > 1) &&
     (!$('#filterAcq').checked || (c.acquisitions || []).length >= 3) &&
@@ -488,7 +489,7 @@ function renderBulkBar() {
 
 let searchTimer;
 $('#search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { state.limit = 200; renderCompanies(); }, 150); });
-const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterEmail', '#filterMulti', '#filterAcq', '#filterWatch'];
+const FILTERS = ['#filterRole', '#filterProject', '#filterCountry', '#filterSector', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterCustomers', '#filterEmail', '#filterMulti', '#filterAcq', '#filterWatch'];
 FILTERS.forEach(s => $(s).addEventListener('change', () => { state.limit = 200; renderCompanies(); }));
 function clearCompanyFilters() {
   FILTERS.forEach(s => { const el = $(s); if (el.type === 'checkbox') el.checked = false; else el.value = ''; });
@@ -513,7 +514,7 @@ function renderFilterChips(count) {
   }
   $('#activeFilters').innerHTML = active.length ? `<span class="muted small"><b>${count.toLocaleString()}</b> match</span>${active.map(([s, l]) => `<span class="fchip">${esc(l)}<button data-unfilter="${s}" title="Remove">×</button></span>`).join('')}<button class="link small" data-unfilter="all">Clear all</button>` : '';
   // The Filters button shows how many of the panel's selects are set; the panel opens by itself when one is.
-  const inPanel = ['#filterRole', '#filterProject', '#filterCountry', '#filterOwnership', '#filterSize', '#filterEnriched'].filter(s => $(s).value).length;
+  const inPanel = ['#filterRole', '#filterProject', '#filterCountry', '#filterOwnership', '#filterSize', '#filterEnriched', '#filterCustomers'].filter(s => $(s).value).length;
   const tb = $('#toggleFilters');
   if (tb) { tb.innerHTML = `Filters${inPanel ? ` <span class="cnt">${inPanel}</span>` : ''}`; tb.classList.toggle('on', inPanel > 0); if (inPanel && !state.filterPanelTouched) $('#filterPanel').hidden = false; }
   const saved = state.savedSearches || [];
@@ -973,6 +974,9 @@ function renderDrawer() {
           <div class="muted small">${esc(how)}${Engine.nichesOf(c).length > 1 ? ` · also ${esc(Engine.nichesOf(c).slice(1, 3).map(n => n.niche).join(', '))}` : ''}</div>`); })()}
         ${fact('Sector (source label)', esc([c.sector, c.subsector].filter(Boolean).join(' · ')))}
         ${fact('Ownership', esc(c.ownership))}
+        ${(() => { const cu = Engine.customerOf(c); return fact('Customers', cu.segment ? `${esc(cu.segment)}${cu.segments.length > 1 ? ` <span class="muted small">(${esc(cu.segments.join(', '))})</span>` : ''}${cu.guessed ? ' <span class="muted small">(from description)</span>' : ''}${cu.industries ? `<div class="muted small">${esc(cu.industries)}</div>` : ''}${cu.geography ? `<div class="muted small">${esc(cu.geography)}</div>` : ''}` : ''); })()}
+        ${fact('Delivery', esc(Engine.deliveryOf(c)))}
+        ${fact('Clients named', (c.customer_examples || []).length ? esc(c.customer_examples.join(', ')) : '')}
         ${fact('Investor type', esc(INVESTOR_TYPE_LABEL[c.investor_type] || ''))}
         ${fact('PE / VC owner', c.sponsor_name ? `${c.sponsor_id && byId(c.sponsor_id) ? `<button class="link" data-open="${esc(c.sponsor_id)}">${esc(c.sponsor_name)}</button>` : esc(c.sponsor_name)}${c.sponsor_since ? ` <span class="muted small">since ${esc(c.sponsor_since)}</span>` : ''}` : '')}
         ${fact('Parent', c.parent_name ? (c.parent_id && byId(c.parent_id) ? `<button class="link" data-open="${esc(c.parent_id)}">${esc(c.parent_name)}</button>` : esc(c.parent_name)) : '')}
@@ -1684,7 +1688,7 @@ function runMatch() {
   const done = contactedFor(deal.id);
   state.matches = Engine.match(deal, state.companies, state.weights).filter(m =>
     m.score >= min &&
-    (!state.roleFilter.size || state.roleFilter.has(m.company.role || '')) &&
+    (!state.roleFilter.size || state.roleFilter.has(m.company.role || '') || (m.company.role === 'Target' && state.roleFilter.has('Buyer') && Engine.canBuy(m.company))) &&
     (!onlyEmail || Engine.hasEmail(m.company)) &&
     (!hide || !done.has(m.company.id)));
   // Pills: all / strategic / PE / family office, with counts (OffDeal-style).
