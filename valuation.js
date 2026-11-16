@@ -7,8 +7,12 @@ const TX_CHUNK = 500;
 async function loadTransactions() {
   const meta = await Store.getState('tx:meta', null);
   if (!meta?.chunks) { state.transactions = []; return; }
+  // Team database: reuse this browser's copy while tx:meta.updated is unchanged (the list is ~26k deals).
+  const copy = await Store.cacheGet('tx:copy', null);
+  if (copy && meta.updated && copy.updated === meta.updated && copy.count === meta.count && Array.isArray(copy.list)) { state.transactions = copy.list; return; }
   const parts = await Promise.all(Array.from({ length: meta.chunks }, (_, i) => Store.getState('tx:' + i, [])));
   state.transactions = parts.flat();
+  Store.cacheSet('tx:copy', { updated: meta.updated, count: meta.count, list: state.transactions });
 }
 async function saveTransactions() {
   const list = state.transactions;
@@ -16,7 +20,9 @@ async function saveTransactions() {
   const old = (await Store.getState('tx:meta', null))?.chunks || 0;
   for (let i = 0; i < chunks; i++) await Store.setState('tx:' + i, list.slice(i * TX_CHUNK, (i + 1) * TX_CHUNK));
   for (let i = chunks; i < old; i++) await Store.setState('tx:' + i, []);
-  await Store.setState('tx:meta', { chunks, count: list.length, updated: new Date().toISOString() });
+  const meta = { chunks, count: list.length, updated: new Date().toISOString() };
+  await Store.setState('tx:meta', meta);
+  Store.cacheSet('tx:copy', { updated: meta.updated, count: meta.count, list });
 }
 
 // ---------- Import (Capital IQ "Transactions" screens and similar exports) ----------

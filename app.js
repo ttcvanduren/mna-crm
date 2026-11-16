@@ -611,7 +611,7 @@ async function importDescriptions(items, meta = {}) {
     if (it.short_description && !c.enrichment?.short_description) c.short_description = it.short_description;
     if (it.summary) c.summary = it.summary;
     if (it.tags?.length) c.tags = [...new Set([...(c.tags || []), ...it.tags.map(t => String(t).toLowerCase())])];
-    Enricher.applyFacts(c, it, { at: meta.created || new Date().toISOString(), src: 'own data (Claude)', level: 0 });
+    Enricher.applyFacts(c, it, { at: meta.created || new Date().toISOString(), src: meta.pass === 'sector' ? 'sector pass' : 'own data (Claude)', level: 0 });
     if (Enricher.isFinancial({ investor_type: it.investor_type }) && (!c.role || c.role_auto)) { c.role = 'Investor'; c.role_auto = false; }
     touch(c);
     n++;
@@ -2128,7 +2128,7 @@ function renderAll() {
 async function loadData() {
   setSync('Loading…');
   const [companies, templates, activity, weights, mapping, projects, pitches, saved] = await Promise.all([
-    Store.loadCompanies(), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null), Store.getState('pitches', null), Store.getState('savedSearches', null),
+    Store.loadCompanies((n, total) => setSync(n ? `Downloading ${n.toLocaleString()} new or changed of ${total.toLocaleString()} companies…` : 'Up to date, opening…')), Store.getState('templates', null), Store.loadActivity(), Store.getState('weights', null), Store.getState('mappingMemory', null), Store.getState('projects', null), Store.getState('pitches', null), Store.getState('savedSearches', null),
   ]);
   state.savedSearches = saved || [];
   state.companies = companies.map(migrate);

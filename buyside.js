@@ -29,7 +29,13 @@ function buyDealOf(proj) {
     niche: (b.niches || [])[0] || '', min_revenue: b.rev_min ?? null, max_revenue: b.rev_max ?? null,
   };
 }
-const hasBuyBox = proj => { const b = proj.buybox || {}; return !!(b.keywords || b.description || (b.niches || []).length || (b.categories || []).length); };
+// Thematic buy box: keywords / niches / categories decide the fit. Generalist ("any industry", e.g. a PE buyer that
+// buys everything): no thematic fit needed; the hard filters (industry tree, size, founded, ownership, country)
+// select and the score ranks on likelihood to sell, size fit, country and data quality.
+const isThematic = b => !!(b.keywords || (b.niches || []).length || (b.categories || []).length);
+const isGeneralist = b => b.scope === 'any' || !isThematic(b);
+const hasBuyBox = proj => { const b = proj.buybox || {}; return isThematic(b) || !!b.description || b.scope === 'any' || !!(b.cls || []).length || listOf(b.countries).length > 0 || b.emp_min != null || b.emp_max != null || b.rev_min != null || b.rev_max != null || b.founded_min != null || b.founded_max != null || listOf(b.ownership).length > 0; };
+const foundedYearOf = c => { const y = +String(c.founded || '').match(/\b(18|19|20)\d{2}\b/)?.[0]; return y || null; };
 
 function countryFits(country, wanted) {
   if (!wanted.length) return true;
@@ -70,15 +76,25 @@ function screenTargetsUncached(proj) {
   const inProject = new Set(members(proj.name).map(m => m.c.id));
   const clientKey = Engine.normName(b.buyer || proj.client || '');
   const pool = state.companies.filter(c => c.role !== 'Investor' && !inProject.has(c.id) && Engine.normName(c.name) !== clientKey);
-  const ranked = Engine.match(deal, pool, state.weights);
+  const generalist = isGeneralist(b), cls = b.cls || [];
+  // Generalist: every operating company is a candidate; the score is built below instead of the thematic match.
+  const ranked = generalist ? pool.map(c => ({ company: c, score: 0, reasons: [] })) : Engine.match(deal, pool, state.weights);
   const wantSeg = listOf(b.segments), wantInd = listOf(b.industries).map(x => x.toLowerCase()), wantDel = listOf(b.delivery), wantOwn = listOf(b.ownership), countries = listOf(b.countries);
   const fits = [], excluded = [];
   for (const m of ranked) {
     const c = m.company;
-    if (m.score < (b.min_fit ?? 25)) continue; // no business fit at all: not worth a row
-    const emp = employeesOf(c), rev = Engine.revenueOf(c), own = Engine.ownershipType(c.ownership) || (c.sponsor_name ? 'PE-backed' : ''), cu = Engine.customerOf(c), del = Engine.deliveryOf(c);
+    if (!generalist && m.score < (b.min_fit ?? 25)) continue; // no business fit at all: not worth a row
+    const clsHit = cls.length ? cls.find(v => clsMatches(c, v)) : null;
+    // Generalist with an industry choice: companies outside it are simply not candidates (no 20,000-row graveyard).
+    if (generalist && cls.length && !clsHit) continue;
+    const emp = employeesOf(c), rev = Engine.revenueOf(c), own = Engine.ownershipType(c.ownership) || (c.sponsor_name ? 'PE-backed' : c.parent_name ? 'Subsidiary' : ''), cu = Engine.customerOf(c), del = Engine.deliveryOf(c);
     const reasons = [], why = [...m.reasons.filter(r => !/Potential target|Likely target/.test(r))];
     // Hard criteria → graveyard reason (first one wins, like the "Reason for exclusion" column).
+    if (cls.length && !clsHit) reasons.push('Other industry');
+    const year = foundedYearOf(c);
+    if (b.founded_min != null && year != null && year < b.founded_min) reasons.push(`Founded ${year} (before ${b.founded_min})`);
+    if (b.founded_max != null && year != null && year > b.founded_max) reasons.push(`Founded ${year} (after ${b.founded_max})`);
+    if ((b.founded_min != null || b.founded_max != null) && year == null && b.founded_required) reasons.push('Founding year unknown');
     const cf = countryFits(c.country, countries);
     if (cf === false) reasons.push('No country fit');
     if (b.emp_min != null && emp != null && emp < b.emp_min) reasons.push('Too small');
@@ -88,6 +104,7 @@ function screenTargetsUncached(proj) {
     if (b.independent !== false && (own === 'Subsidiary' || c.parent_name)) reasons.push('No longer independent');
     if (wantOwn.length && own && !wantOwn.includes(own) && !(own === 'Private / founder' && wantOwn.includes('Private / founder'))) reasons.push(`Ownership (${own})`);
     if (own === 'Listed' && !wantOwn.includes('Listed') && wantOwn.length) reasons.push('Listed');
+    if (wantOwn.length && !own && b.ownership_required) reasons.push('Ownership unknown');
     if (wantDel.length && del && !wantDel.includes(del)) reasons.push(`Delivery: ${del}`);
     // Soft criteria → bonus points and reasons.
     let bonus = 0;
@@ -97,8 +114,30 @@ function screenTargetsUncached(proj) {
     if (wantInd.length) { const hit = wantInd.filter(w => (cu.industries + ' ' + c.short_description + ' ' + c.description).toLowerCase().includes(w)); if (hit.length) { bonus += Math.min(10, 4 * hit.length); why.push(`Serves ${hit.slice(0, 3).join(', ')}`); } }
     if (wantDel.length && wantDel.includes(del)) bonus += 4;
     const side = Engine.sideOf(c);
-    const score = Math.max(0, Math.min(100, m.score + bonus));
+    let base = m.score;
+    if (generalist) {
+      // No thematic fit: likelihood to sell (founder / PE exit window / size sweet spot), size fit, ownership wanted,
+      // industry match depth and data quality.
+      const sizeSet = b.emp_min != null || b.emp_max != null || b.rev_min != null || b.rev_max != null;
+      const sizeKnown = sizeSet && ((b.emp_min != null || b.emp_max != null) ? emp != null : rev && !rev.rough);
+      base = Math.round(side.target * 38) + (sizeSet ? (sizeKnown ? 12 : 4) : 6);
+      if (wantOwn.length && own && wantOwn.includes(own)) { base += 8; why.push(`Ownership: ${own}`); }
+      // Industry depth: a niche or sub-sector pick that matches counts more than a broad sector.
+      if (clsHit) { base += clsHit[0] === 'n' ? 10 : clsHit[0] === 'U' ? 7 : clsHit[0] === 'S' ? 3 : 1; why.push(`Industry: ${clsHit.slice(2)}`); }
+      // Age: older founder-run companies are more likely to have a succession question.
+      const age = year != null ? new Date().getFullYear() - year : null;
+      if (age != null) base += age >= 25 ? 6 : age >= 15 ? 4 : age >= 8 ? 2 : 0;
+      // Data quality: researched, a named CEO / owner, website, a revenue figure (stated beats estimated).
+      const hasBoss = (c.contacts || []).some(x => /ceo|founder|owner|directeur|managing/i.test(`${x.title || ''} ${x.role_tag || ''}`));
+      base += (c.research?.level >= 2 || c.enrichment ? 6 : 0) + (hasBoss ? 4 : 0) + (c.website ? 2 : 0) + (c.revenue != null ? 4 : rev ? 1 : 0);
+      if (side.target >= 0.6) why.unshift(`Likely seller: ${side.why.target.slice(0, 2).join(', ')}`);
+      if (year != null && (b.founded_min != null || b.founded_max != null)) why.push(`Founded ${year}`);
+      if (sizeKnown) why.push(emp != null ? `${Engine.fmt(emp)} staff` : `Revenue ≈ €${Engine.fmt(Math.round(rev.v * 10) / 10)}m`);
+    }
+    const score = Math.max(0, Math.min(100, base + bonus));
     const row = { company: c, score, tier: score >= 65 ? '1' : score >= 50 ? '2' : '3', category: categoryOf(c, b.categories), why: [...new Set(why)], reason: reasons[0] || '', reasons, emp, rev, own, cu, del, side };
+    // Generalist screens cover the whole database: only near misses (size, founded, ownership, delivery) go to the graveyard.
+    if (generalist && reasons.includes('No country fit')) continue;
     (reasons.length ? excluded : fits).push(row);
   }
   fits.sort((a, b2) => b2.score - a.score);
@@ -109,7 +148,7 @@ function screenTargetsUncached(proj) {
 // ---------- Find targets tab ----------
 const tf = { view: 'fits', limit: 150, picked: new Set(), cat: '', reason: '' };
 function findTargetsHtml(proj) {
-  if (!hasBuyBox(proj)) return `<div class="empty">First describe what the client wants to buy: categories / niches, keywords, countries, size and customer type.<br><br><button class="btn primary" data-x="editProfile">Set the buy box</button></div>`;
+  if (!hasBuyBox(proj)) return `<div class="empty">First describe what the client wants to buy: a theme (categories / niches / keywords) or, for a generalist buyer, just industries, size, founded, ownership and countries.<br><br><button class="btn primary" data-x="editProfile">Set the buy box</button></div>`;
   const { fits, excluded } = screenTargets(proj);
   const cats = [...new Set(fits.map(r => r.category).filter(Boolean))];
   const reasons = [...excluded.reduce((m, r) => m.set(r.reason, (m.get(r.reason) || 0) + 1), new Map())].sort((a, b) => b[1] - a[1]);
@@ -120,7 +159,7 @@ function findTargetsHtml(proj) {
   const segTxt = r => r.cu.segment ? `${esc(r.cu.segment)}${r.cu.guessed ? '<span class="muted">*</span>' : ''}` : '<span class="dash">–</span>';
   const revTxt = r => r.rev ? `${r.rev.est ? '≈ ' : ''}€${Engine.fmt(Math.round(r.rev.v * 10) / 10)}m` : '<span class="dash">–</span>';
   return `<div class="callout"><span>✦</span><div><b>${fits.length.toLocaleString()} targets fit the buy box</b> · ${excluded.length.toLocaleString()} excluded on hard criteria.
-      Ranked on niche / keyword fit, size, likelihood to sell, customer type, industries and country. Tiers: 1 ≥ 65, 2 ≥ 50, else 3.</div></div>
+      ${isGeneralist(proj.buybox || {}) ? 'Generalist screen: every company in the chosen industries, ranked on likelihood to sell, size fit, ownership, industry match and data quality.' : 'Ranked on niche / keyword fit, size, likelihood to sell, customer type, industries and country.'} Tiers: 1 ≥ 65, 2 ≥ 50, else 3.</div></div>
     <div class="filters">
       <div class="seg-tabs"><button data-tview="fits" class="${tf.view === 'fits' ? 'on' : ''}">Fits (${fits.length})</button><button data-tview="excluded" class="${tf.view !== 'fits' ? 'on' : ''}">Graveyard (${excluded.length})</button></div>
       ${tf.view === 'fits' && cats.length ? `<select id="tfCat"><option value="">All categories</option>${cats.map(c => `<option ${c === tf.cat ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>` : ''}
@@ -173,6 +212,9 @@ function buyOverviewHtml(proj) {
       <div class="toolbar" style="margin-bottom:6px"><h2 style="margin:0">Buy box</h2><span class="chip gold">Buy-side</span><span class="spacer"></span><button class="btn sm" data-x="editProfile">Edit</button></div>
       ${hasBuyBox(proj) ? `<p class="lead">${esc(b.buyer || proj.client || 'Client')} wants to acquire</p>${b.description ? `<p class="prose">${esc(b.description)}</p>` : ''}
         <div class="facts">
+          ${fact('Scope', isGeneralist(b) ? 'Any business (generalist)' : 'Thematic')}
+          ${fact('Industries', esc((b.cls || []).map(v => v.slice(2)).join(', ')))}
+          ${fact('Founded', esc(range(b.founded_min, b.founded_max).replace(/^0 – /, 'up to ').replace(/ – any$/, ' or later')))}
           ${fact('Countries', esc(listOf(b.countries).join(', ')))}
           ${fact('Employees', esc(range(b.emp_min, b.emp_max)))}
           ${fact('Revenue (EUR m)', esc(range(b.rev_min, b.rev_max)))}
@@ -201,13 +243,26 @@ function buyBoxFormHtml(p) {
   const b = p.buybox || {};
   const checks = (name, opts, cur) => `<div class="check-row">${opts.map(o => `<label class="check"><input type="checkbox" name="${name}" value="${esc(o)}" ${listOf(cur).includes(o) ? 'checked' : ''}> ${esc(o)}</label>`).join('')}</div>`;
   const cats = (b.categories || []).map(c => `${c.name}: ${c.keywords || ''}${c.description ? ' | ' + c.description : ''}`).join('\n');
+  // Industry › sector › sub-sector › niche tree from the Companies filter, as a multi-select (Ctrl / Cmd-click for several).
+  const chosen = new Set(b.cls || []);
+  const tree = clsFilterHtml('').replace(/<option value="">[^<]*<\/option>/, '').replace(/<optgroup[\s\S]*?<\/optgroup>/, '')
+    .replace(/<option value="([^"]*)"/g, (m, v) => chosen.has(v.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'")) ? `${m} selected` : m);
+  const generalist = b.scope === 'any';
   return `<h3>Buy box: what the client wants to acquire</h3>
-    <p class="muted small">Used by <b>Find targets</b>. Hard criteria (country, size, ownership, independence, delivery) send a company to the graveyard with the reason; customer type and industries add points.</p>
+    <p class="muted small">Used by <b>Find targets</b>. Hard criteria (industry, country, size, founded, ownership, independence, delivery) send a company to the graveyard with the reason; customer type and industries add points.</p>
+    <div class="side-pick" style="margin-bottom:10px">
+      <label class="check"><input type="radio" name="b_scope" value="theme" ${generalist ? '' : 'checked'}> <b>Thematic</b> <span class="muted small">niches, keywords and categories decide the fit (e.g. a software buyer looking for document automation)</span></label>
+      <label class="check"><input type="radio" name="b_scope" value="any" ${generalist ? 'checked' : ''}> <b>Any business (generalist)</b> <span class="muted small">no theme needed: filter on industry, size, founded, ownership and country; ranked on likelihood to sell (e.g. a PE fund or holding that buys anything)</span></label>
+    </div>
     <div class="form-grid">
       <label>Acquirer (client) <input name="b_buyer" value="${esc(b.buyer || p.client || '')}" placeholder="e.g. Netcall"></label>
       <label>Countries / regions <input name="b_countries" value="${esc(listOf(b.countries).join('; '))}" placeholder="e.g. Netherlands; DACH; France; Nordics"></label>
+      <label class="full">Industries / sectors <span class="muted small">(none = all; Ctrl / Cmd-click to pick several, e.g. Technology › IT services and Business Services)</span>
+        <select name="b_cls" multiple size="8" style="width:100%">${tree}</select></label>
       <label>Employees min – max <span class="pair"><input name="b_emp_min" value="${esc(b.emp_min ?? '')}" placeholder="20"><input name="b_emp_max" value="${esc(b.emp_max ?? '')}" placeholder="250"></span></label>
       <label>Revenue min – max (EUR m) <span class="pair"><input name="b_rev_min" value="${esc(b.rev_min ?? '')}" placeholder="3"><input name="b_rev_max" value="${esc(b.rev_max ?? '')}" placeholder="40"></span></label>
+      <label>Founded from – to (year) <span class="pair"><input name="b_founded_min" value="${esc(b.founded_min ?? '')}" placeholder="1990"><input name="b_founded_max" value="${esc(b.founded_max ?? '')}" placeholder="2015"></span></label>
+      <label class="check" style="align-self:end"><input type="checkbox" name="b_founded_required" ${b.founded_required ? 'checked' : ''}> Exclude companies without a known founding year</label>
       <label class="full">Categories (one per line: <i>name: keywords | description</i>; the description goes on the Technology sheet of the export) <textarea name="b_categories" rows="5" placeholder="Document automation: IDP; document capture; OCR; CCM | Automation of document-heavy processes&#10;CXM / Customer intelligence: contact centre; voice of customer; customer feedback&#10;Process intelligence / BPM: process mining; task mining; BPM&#10;Low-code / workflow automation: low-code; no-code; workflow&#10;iPaaS / integration: integration platform; API management">${esc(cats)}</textarea></label>
       <label class="full">Niches (from the taxonomy, ; separated) <input name="b_niches" list="nicheList" value="${esc((b.niches || []).join('; '))}" placeholder="e.g. Intelligent document processing; Low-code / no-code; Process mining & intelligence"></label>
       <label class="full">Extra keywords <input name="b_keywords" value="${esc(b.keywords || '')}" placeholder="e.g. case management; customer communications; KYC"></label>
@@ -215,6 +270,7 @@ function buyBoxFormHtml(p) {
       <label class="full">Customer industries <input name="b_industries" value="${esc(listOf(b.industries).join('; '))}" placeholder="e.g. financial services; insurance; public sector; healthcare"></label>
       <label class="full">Delivery ${checks('b_delivery', DELIVERY_OPTIONS, b.delivery)}</label>
       <label class="full">Ownership allowed <span class="muted small">(none ticked = any)</span> ${checks('b_ownership', OWNERSHIP_OPTIONS, b.ownership)}</label>
+      <label class="check"><input type="checkbox" name="b_ownership_required" ${b.ownership_required ? 'checked' : ''}> Exclude companies whose ownership is unknown</label>
       <label class="check"><input type="checkbox" name="b_independent" ${b.independent !== false ? 'checked' : ''}> Independent companies only (exclude subsidiaries)</label>
       <label class="full">Strategic rationale <textarea name="b_description" rows="3" placeholder="What the client is looking for and why">${esc(b.description || '')}</textarea></label>
     </div>
@@ -225,6 +281,8 @@ function readBuyBox(fd) {
   const num = k => { const v = Engine.parseNumber(fd.get(k)); return v == null ? null : v; };
   return {
     buyer: String(fd.get('b_buyer') || '').trim(), countries: listOf(fd.get('b_countries')),
+    scope: fd.get('b_scope') === 'any' ? 'any' : 'theme', cls: fd.getAll('b_cls').filter(Boolean),
+    founded_min: num('b_founded_min'), founded_max: num('b_founded_max'), founded_required: fd.get('b_founded_required') === 'on', ownership_required: fd.get('b_ownership_required') === 'on',
     emp_min: num('b_emp_min'), emp_max: num('b_emp_max'), rev_min: num('b_rev_min'), rev_max: num('b_rev_max'),
     categories: String(fd.get('b_categories') || '').split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [name, ...rest] = l.split(':'); const [kw, ...desc] = rest.join(':').split('|'); return { name: name.trim(), keywords: kw.trim(), ...(desc.length ? { description: desc.join('|').trim() } : {}) }; }),
     niches: listOf(fd.get('b_niches')).filter(n => Taxonomy.subsectorOf(n) || true), keywords: String(fd.get('b_keywords') || '').trim(),
@@ -286,7 +344,10 @@ const TargetList = (() => {
     const detail = extraOf(p, /^ownership detailed$/i) || [c.sponsor_name ? `${c.sponsor_name}${c.sponsor_since ? ` (${String(c.sponsor_since).slice(0, 4)})` : ''}` : '', c.parent_name ? `Part of ${c.parent_name}` : '', !c.sponsor_name && c.investors ? c.investors : ''].filter(Boolean).join('; ') || (own === 'Listed' ? c.ownership || '' : '');
     return {
       company: c.name || '', website: url(c.website), location: c.country || '', brief: c.short_description || String(c.description || '').slice(0, 220),
-      tier: Number(p?.tier || item.tier) || (p?.tier || item.tier || ''), founded: Number(c.founded) || c.founded || '',
+      tier: Number(p?.tier || item.tier) || (p?.tier || item.tier || ''),
+      score: item.score ?? (Number(String(p?.rationale || '').match(/^Fit (\d+)/)?.[1]) || null),
+      researched: c.research?.level >= 2 || c.enrichment ? 'Yes' : 'No',
+      founded: Number(c.founded) || c.founded || '',
       technology: p?.category || item.category || categoryOf(c, proj.buybox?.categories) || c.niche || '', delivery: del || '',
       sector: cu.industries || (cu.segments?.length ? 'Agnostic' : ''), clients: clientsOf(cu), empl: Engine.parseNumber(c.linkedin_employees ?? c.employees ?? extraOf(p, /^#?\s*empl/i)) ?? '',
       revenue: k(rev), ebitda: k(c.ebitda), ownership: own === 'Listed' && c.ticker ? `Public (${c.ticker})` : OWN_SHORT[own] || (own === 'Other' ? c.ownership || '' : ''), ownDetail: detail,
@@ -313,7 +374,7 @@ const TargetList = (() => {
     const cl = client(proj);
     const cols = [
       ['#', 'n', 4.1, 'center'], ['Company', 'company', 27.9], ['Website', 'website', graveyard ? 28.7 : 9.2], ['Location', 'location', 13.2, null, true], ['Brief description', 'brief', graveyard ? 33.2 : 83.7],
-      ['Tier ', 'tier', 10.6, 'center'], ...(graveyard ? [['Comment HY', 'cAdvisor', 13]] : []), ['Founded', 'founded', graveyard ? 9.9 : 10.6, 'center'], ['Technology', 'technology', 27.6], ['Delivery', 'delivery', 17.3],
+      ['Tier ', 'tier', 10.6, 'center'], ['Fit score', 'score', 9.5, 'center'], ['Researched', 'researched', 11, 'center'], ...(graveyard ? [['Comment HY', 'cAdvisor', 13]] : []), ['Founded', 'founded', graveyard ? 9.9 : 10.6, 'center'], ['Technology', 'technology', 27.6], ['Delivery', 'delivery', 17.3],
       ['Sector focus', 'sector', 20], ['Clients', 'clients', 13.9], ['#empl.', 'empl', 8, 'center'], ['Revenue', 'revenue', 13.1, 'center'], ['EBITDA', 'ebitda', 13.1, 'center'],
       ['Ownership', 'ownership', 15.3, 'center'], ['Ownership detailed ', 'ownDetail', 30],
       ...(graveyard ? [] : [['Comment HY', 'cAdvisor', 22.7]]), ['Comment 33E', 'c33', 60], [`Comment ${cl}`, 'cClient', 45], ['Extended description', 'extended', 80],
@@ -382,7 +443,7 @@ const TargetList = (() => {
     await load();
     const cl = client(proj), name = proj.name || 'Project';
     const wb = new ExcelJS.Workbook(); wb.creator = '33 Equity'; wb.created = new Date();
-    const order = (a, b) => (Number(a.tier) || 9) - (Number(b.tier) || 9) || a.company.localeCompare(b.company);
+    const order = (a, b) => (Number(a.tier) || 9) - (Number(b.tier) || 9) || (b.score ?? -1) - (a.score ?? -1) || a.company.localeCompare(b.company);
     listSheet(wb, `Target list - ${cl}`.slice(0, 31), `Project ${name} - target list`, fits.map(x => rowOf(x, proj)).sort(order), proj);
     technologySheet(wb, proj);
     listSheet(wb, 'Graveyard', `Project ${name} - graveyard`, graveyard.map(x => rowOf(x, proj)), proj, { graveyard: true });
@@ -396,7 +457,12 @@ const TargetList = (() => {
 
   // The project's own targets: active ones on the list, passed / excluded ones in the graveyard.
   const isOut = p => Engine.boardStage(p.status) === 'Passed' || /^0\.\s*Passed/i.test(String(p.status || '')) || !!String(p.pass_reason || '').trim();
-  const fromProject = proj => { const m = members(proj.name); return download(proj, m.filter(x => !isOut(x.p)), m.filter(x => isOut(x.p))); };
+  // Fit scores for the project's own targets: the same match against the buy box as Find targets.
+  const fromProject = proj => {
+    const m = members(proj.name);
+    if (hasBuyBox(proj)) { const sc = new Map(Engine.match(buyDealOf(proj), m.map(x => x.c), state.weights).map(r => [r.company.id, r.score])); m.forEach(x => { x.score = sc.get(x.c.id) ?? null; }); }
+    return download(proj, m.filter(x => !isOut(x.p)), m.filter(x => isOut(x.p)));
+  };
   // The Find targets screen: ticked fits (or the top N shown) and the top of the graveyard.
   const fromScreen = proj => { const { fits, excluded } = screenTargets(proj); const pick = tf.picked.size ? fits.filter(r => tf.picked.has(r.company.id)) : fits.filter(r => !tf.cat || r.category === tf.cat).slice(0, tf.limit); return download(proj, pick, excluded.slice(0, tf.limit), 'Target screen'); };
   return { download, fromProject, fromScreen, rowOf, load };

@@ -151,7 +151,7 @@ If the name is ambiguous, use the website and country to pick the right company,
     // A broad source label ("Application Software") is replaced by the researched sector; real labels from your lists are kept.
     if (p.sector && !Taxonomy.isGeneric(p.sector) && Taxonomy.isGeneric(c.sector)) c.sector = p.sector;
     // The researched niche becomes the company's niche unless you set one yourself.
-    if (p.niche && Taxonomy.subsectorOf(p.niche) && (!c.niche || c.niche_auto || c.niche_src === 'research')) Object.assign(c, { niche: p.niche, niche_auto: false, niche_src: 'research' });
+    if (p.niche && Taxonomy.subsectorOf(p.niche) && (!c.niche || c.niche_auto || c.niche_src === 'research' || c.niche_src === 'sector pass')) Object.assign(c, { niche: p.niche, niche_auto: false, niche_src: 'research' });
     if (p.linkedin_url) c.linkedin_url = Engine.cleanUrl(p.linkedin_url);
     if (p.linkedin_employees) { c.linkedin_employees = toNumber(p.linkedin_employees); c.linkedin_employees_text = p.linkedin_employees; }
     if (blank(c.employees) && toNumber(p.employees)) c.employees = toNumber(p.employees);
@@ -270,6 +270,7 @@ If the name is ambiguous, use the website and country to pick the right company,
     if (c.ebitda == null && num(p.ebitda) != null) { c.ebitda = num(p.ebitda); c.currency ||= 'EUR'; n++; }
     if (blank(c.acquisition_focus) && p.acquisition_focus) { c.acquisition_focus = p.acquisition_focus; n++; }
     for (const k of ['target_sectors', 'target_countries']) set(c, k, p[k]);
+    if (['Software', 'Software & services', 'Services'].includes(p.delivery)) set(c, 'delivery', p.delivery);
     // Customer type (who the company sells to): main bucket, all buckets, industries served, geography, named clients.
     // Sourced research replaces a value that was guessed from an import label; your own entries win.
     if (p.customer_segment || p.customer_segments?.length) {
@@ -309,31 +310,59 @@ If the name is ambiguous, use the website and country to pick the right company,
 
   // Owners from the deal history: the latest buyer of a company in the database. A financial buyer becomes the
   // sponsor (PE-backed platform), a strategic one the parent. Only fills blanks or earlier derived values.
+  // Capital IQ puts several parties in one field ("Dragoneer…; KKR North America Fund XIII SCSp; KKR & Co. Inc. (NYSE:KKR)")
+  // and a stock ticker after listed ones. Split into { name, ticker }.
+  const TICKER = /\s*\(([A-Z][A-Z0-9]{0,11})?:([A-Z0-9][A-Z0-9.\-]{0,11})\)\s*$/;
+  const parties = s => String(s || '').split(/\s*;\s*/).map(x => x.trim()).filter(Boolean).map(x => { const m = x.match(TICKER); return { name: m ? x.replace(TICKER, '').trim() : x, ticker: m ? `${m[1] ? m[1] + ':' : ''}${m[2]}` : '' }; });
+
   function ownersFromDeals(companies, transactions) {
     const byName = new Map();
     for (const c of companies) for (const n of [c.name, ...(c.aliases || [])]) { const k = Engine.normName(n); if (k && !byName.has(k)) byName.set(k, c); }
-    const latest = new Map();
+    const find = n => byName.get(Engine.normName(n)) || byName.get(Engine.normName(String(n).replace(TICKER, '')));
+    const latest = new Map(), listed = new Map();
+    const seenListed = (c, ticker, date) => { const p = listed.get(c); if (!p || date > p.date) listed.set(c, { ticker, date }); };
     for (const t of transactions || []) {
-      if (/terminated|withdrawn/i.test(t.status || '')) continue;
-      const target = byName.get(Engine.normName(t.target)), buyer = byName.get(Engine.normName(t.buyer));
-      if (!target || !buyer || target === buyer) continue;
       const date = String(t.date || t.year || '');
+      // Any party shown with a ticker was listed at that date.
+      for (const f of ['buyer', 'seller', 'target']) for (const p of parties(t[f])) if (p.ticker) { const c = find(p.name); if (c) seenListed(c, p.ticker, date); }
+      if (/terminated|withdrawn|cancel/i.test(t.status || '')) continue;
+      const target = find(t.target);
+      if (!target) continue;
+      // Several buyers: a financial one makes the target PE-backed; otherwise the first strategic buyer is the parent.
+      const buyers = parties(t.buyer).map(p => find(p.name)).filter(b => b && b !== target);
+      if (!buyers.length) continue;
+      const buyer = buyers.find(isFinancial) || buyers[0];
+      if (/\bminority\b/i.test([t.type, t.stake].join(' ')) && !isFinancial(buyer)) continue; // a minority stake does not make a parent
       const prev = latest.get(target);
       if (!prev || date > prev.date) latest.set(target, { buyer, date });
     }
-    const changed = [];
-    let sponsors = 0, parents = 0;
+    const changed = new Set();
+    let sponsors = 0, parents = 0, listedN = 0;
     for (const [c, { buyer, date }] of latest) {
       if (isFinancial(c)) continue;
-      const year = date.slice(0, 4);
+      const year = date.slice(0, 4), lst = listed.get(c);
+      if (lst && lst.date > date) continue; // listed after the deal (IPO): the listing below wins
       if (isFinancial(buyer)) {
         if ((isEmpty(c.sponsor_name) || c.sponsor_src === 'deals') && (c.sponsor_id !== buyer.id || c.sponsor_since !== year)) {
           Object.assign(c, { sponsor_name: buyer.name, sponsor_id: buyer.id, sponsor_since: year, sponsor_src: 'deals' });
-          sponsors++; changed.push(c);
+          if (isEmpty(c.ownership)) { c.ownership = `PE-backed (${buyer.name}, since ${year})`; c.ownership_src = 'deals'; }
+          sponsors++; changed.add(c);
         }
-      } else if (isEmpty(c.parent_name)) { c.parent_name = buyer.name; c.parent_id = buyer.id; parents++; changed.push(c); }
+      } else if (isEmpty(c.parent_name)) {
+        c.parent_name = buyer.name; c.parent_id = buyer.id;
+        if (isEmpty(c.ownership)) { c.ownership = `Subsidiary of ${buyer.name} (since ${year})`; c.ownership_src = 'deals'; }
+        parents++; changed.add(c);
+      }
     }
-    return { sponsors, parents, changed };
+    // Listed companies: shown with a ticker in a deal, and not taken over after that date.
+    for (const [c, { ticker, date }] of listed) {
+      if (isFinancial(c) || !isEmpty(c.ownership)) continue;
+      const take = latest.get(c);
+      if (take && take.date > date) continue;
+      c.ownership = `Listed (${ticker})`; c.ownership_src = 'deals'; if (isEmpty(c.ticker)) c.ticker = ticker;
+      listedN++; changed.add(c);
+    }
+    return { sponsors, parents, listed: listedN, changed: [...changed] };
   }
 
   // Quick profile of a company being valued, read from its own website (comp set builder). Cheap: a few page fetches, no people or deals.

@@ -82,7 +82,7 @@ document.addEventListener('click', async e => {
     const own = Enricher.ownersFromDeals(state.companies, state.transactions || []);
     own.changed.forEach(c => changed.add(c));
     if (changed.size) { touch(...changed); await flush(); }
-    toast(`Filled in ${changed.size.toLocaleString()} companies from your own data: ${own.sponsors.toLocaleString()} PE owners and ${own.parents.toLocaleString()} parents from the deal history.`, 8000);
+    toast(`Filled in ${changed.size.toLocaleString()} companies from your own data: ${own.sponsors.toLocaleString()} PE owners, ${own.parents.toLocaleString()} parents and ${(own.listed || 0).toLocaleString()} listed companies from the deal history.`, 8000);
     renderData();
   } catch (err) { toast('Could not fill in: ' + err.message, 7000); } finally { btn.disabled = false; }
 });

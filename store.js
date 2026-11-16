@@ -91,7 +91,7 @@ const Store = (() => {
     const { data } = await sb.auth.getSession();
     return data.session?.access_token || anonKey;
   }
-  async function signOut() { if (sb) await sb.auth.signOut(); user = null; }
+  async function signOut() { if (sb) await sb.auth.signOut(); user = null; await cache.clear().catch(() => {}); }
 
   // Browser storage: one record per company. Data saved by the old version (one big array) is moved over once.
   async function localLoad() {
@@ -102,17 +102,87 @@ const Store = (() => {
     return old;
   }
 
-  async function loadCompanies() {
-    if (mode === 'local') return localLoad();
-    const out = [];
-    for (let from = 0; ; from += 1000) {
-      const res = await sb.from('companies').select('id,data').order('id').range(from, from + 999);
-      check(res);
-      out.push(...res.data.map(r => ({ ...r.data, id: r.id })));
-      if (res.data.length < 1000) break;
-    }
-    return out;
+  // ---------- Team database: local copy + sync of changes ----------
+  // Loading every company from Supabase on each visit (28k+ companies, ~150 MB) is slow. The browser keeps a copy
+  // (IndexedDB 'mna-crm-cache': store 'companies' + kv 'stamps' = { id: updated_at }). On load it fetches only
+  // id + updated_at for all rows (~1.5 MB), then the full rows that are new or changed, and drops deleted ones.
+  // Comparing stamps per row (not "changed since") is robust to clock differences between team members' PCs.
+  const cache = {
+    _db: null,
+    open() {
+      if (this._db) return Promise.resolve(this._db);
+      return new Promise((res, rej) => {
+        const r = indexedDB.open('mna-crm-cache', 1);
+        r.onupgradeneeded = () => { const db = r.result; db.createObjectStore('companies', { keyPath: 'id' }); db.createObjectStore('kv'); };
+        r.onsuccess = () => res((this._db = r.result));
+        r.onerror = () => rej(r.error);
+      });
+    },
+    async all() { const db = await this.open(); return new Promise((res, rej) => { const q = db.transaction('companies').objectStore('companies').getAll(); q.onsuccess = () => res(q.result || []); q.onerror = () => rej(q.error); }); },
+    async write(puts = [], dels = []) {
+      const db = await this.open();
+      return new Promise((res, rej) => { const tx = db.transaction('companies', 'readwrite'), os = tx.objectStore('companies'); puts.forEach(v => os.put(v)); dels.forEach(k => os.delete(k)); tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+    },
+    async get(k, fallback) { const db = await this.open(); return new Promise(res => { const q = db.transaction('kv').objectStore('kv').get(k); q.onsuccess = () => res(q.result ?? fallback); q.onerror = () => res(fallback); }); },
+    async set(k, v) { const db = await this.open(); return new Promise((res, rej) => { const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); },
+    async clear() { const db = await this.open(); return new Promise(res => { const tx = db.transaction(['companies', 'kv'], 'readwrite'); tx.objectStore('companies').clear(); tx.objectStore('kv').clear(); tx.oncomplete = res; tx.onerror = res; }); },
+  };
+  const sameStamp = (a, b) => !!a && !!b && Date.parse(a) === Date.parse(b);
+  // Runs async jobs with at most n in flight.
+  async function pool(jobs, n = 6) { const out = new Array(jobs.length); let i = 0; await Promise.all(Array.from({ length: Math.min(n, jobs.length) }, async () => { while (i < jobs.length) { const k = i++; out[k] = await jobs[k](); } })); return out; }
+  const PAGE = 1000;
+  // Source of rows: the Supabase table (kept separate so the sync logic can be tested with a fake source).
+  const cloudSource = () => ({
+    async count() { const res = await sb.from('companies').select('id', { count: 'exact', head: true }); check(res); return res.count || 0; },
+    async stamps(n) { const pages = await pool(Array.from({ length: Math.ceil(n / PAGE) + 1 }, (_, p) => async () => { const res = await sb.from('companies').select('id,updated_at').order('id').range(p * PAGE, p * PAGE + PAGE - 1); check(res); return res.data; })); return pages.flat(); },
+    async rows(ids) { const parts = await pool(chunks(ids, 200).map(part => async () => { const res = await sb.from('companies').select('id,data,updated_at').in('id', part); check(res); return res.data; }), 4); return parts.flat(); },
+  });
+  async function syncCompanies(src, onProgress) {
+    const [cached, stamps0] = await Promise.all([cache.all().catch(() => []), cache.get('stamps', {}).catch(() => ({}))]);
+    const stamps = stamps0 || {};
+    const n = await src.count();
+    const server = await src.stamps(n);
+    const byId = new Map(cached.map(c => [c.id, c]));
+    const need = server.filter(r => !byId.has(r.id) || !sameStamp(stamps[r.id], r.updated_at)).map(r => r.id);
+    onProgress?.(need.length, server.length);
+    const fresh = need.length ? await src.rows(need) : [];
+    const puts = fresh.map(r => ({ ...r.data, id: r.id }));
+    for (const r of fresh) stamps[r.id] = r.updated_at;
+    puts.forEach(c => byId.set(c.id, c));
+    const live = new Set(server.map(r => r.id));
+    const dels = [...byId.keys()].filter(id => !live.has(id));
+    dels.forEach(id => { byId.delete(id); delete stamps[id]; });
+    if (puts.length || dels.length) { await cache.write(puts, dels).catch(() => {}); await cache.set('stamps', stamps).catch(() => {}); }
+    return { companies: [...byId.values()], fetched: puts.length, removed: dels.length, total: server.length };
   }
+
+  async function loadCompanies(onProgress) {
+    if (mode === 'local') return localLoad();
+    try {
+      const r = await syncCompanies(cloudSource(), onProgress);
+      lastSync = r;
+      return r.companies;
+    } catch (err) {
+      // Cache unavailable (private window, blocked storage): fall back to loading everything, in parallel pages.
+      console.warn('Sync failed, loading everything', err);
+      const src = cloudSource(), n = await src.count();
+      const pages = await pool(Array.from({ length: Math.ceil(n / PAGE) + 1 }, (_, p) => async () => { const res = await sb.from('companies').select('id,data').order('id').range(p * PAGE, p * PAGE + PAGE - 1); check(res); return res.data; }), 4);
+      return pages.flat().map(r => ({ ...r.data, id: r.id }));
+    }
+  }
+  let lastSync = null;
+  // Keeps the local copy in step with this browser's own saves, so they are not downloaded again.
+  async function cacheSaved(rows) {
+    if (mode !== 'cloud' || !rows.length) return;
+    try { const stamps = await cache.get('stamps', {}); rows.forEach(r => { stamps[r.id] = r.updated_at; }); await cache.write(rows.map(r => ({ ...r.data, id: r.id }))); await cache.set('stamps', stamps); } catch { /* the next load fetches them */ }
+  }
+  async function cacheDeleted(ids) {
+    if (mode !== 'cloud' || !ids.length) return;
+    try { const stamps = await cache.get('stamps', {}); ids.forEach(id => delete stamps[id]); await cache.write([], ids); await cache.set('stamps', stamps); } catch { /* next load prunes them */ }
+  }
+  // Shared state blobs that are large and rarely change (transactions): kept in the local copy, keyed by a version.
+  const cacheGet = (k, fallback) => mode === 'cloud' ? cache.get(k, fallback).catch(() => fallback) : Promise.resolve(fallback);
+  const cacheSet = (k, v) => mode === 'cloud' ? cache.set(k, v).catch(() => {}) : Promise.resolve();
 
   // `changed` is what to write to the cloud; `all` is the full list for browser storage.
   // Cloud: batches of at most 100 companies and ~1.5 MB, because large records (long deal lists, research texts) can hit
@@ -134,7 +204,7 @@ const Store = (() => {
     const failed = [];
     const send = async b => {
       const { error } = await sb.from('companies').upsert(b);
-      if (!error) { done += b.length; onProgress?.(done, rows.length); return; }
+      if (!error) { done += b.length; onProgress?.(done, rows.length); await cacheSaved(b); return; }
       if (b.length > 1) { const h = Math.ceil(b.length / 2); await send(b.slice(0, h)); await send(b.slice(h)); return; }
       failed.push(b[0].id); lastError = error.message;
     };
@@ -145,6 +215,7 @@ const Store = (() => {
   async function deleteCompanies(ids, all) {
     if (mode === 'local') return idb.write('companies', [], ids);
     for (const part of chunks(ids, 200)) check(await sb.from('companies').delete().in('id', part));
+    await cacheDeleted(ids);
   }
 
   async function loadActivity() {
@@ -185,8 +256,9 @@ const Store = (() => {
   const localCompanies = () => localLoad();
 
   return {
-    mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies, loadLeads, updateLead,
+    mode, domain, init, sendLoginLink, signOut, accessToken, loadCompanies, cacheGet, cacheSet, _sync: { syncCompanies, cache }, saveCompanies, deleteCompanies, loadActivity, addActivity, getState, setState, localCompanies, loadLeads, updateLead,
     get user() { return user; },
     get configured() { return !!(url && anonKey); },
+    get lastSync() { return lastSync; },
   };
 })();
